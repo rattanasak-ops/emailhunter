@@ -1,0 +1,31 @@
+# Environment
+.env
+*.env.local
+
+# Node
+node_modules/
+package-lock.json
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes
+api-data/
+n8n-data/
+
+# Uploads
+uploads/
+*.xlsx
+*.xls

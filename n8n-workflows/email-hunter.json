@@ -1,0 +1,431 @@
+{
+  "name": "EmailHunter - Company Email Finder",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 2,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=== ใส่ Google Sheet ID ที่นี่ ==="
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Sheet1"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "status",
+              "lookupValue": "pending"
+            }
+          ]
+        },
+        "options": {
+          "range": "A:G",
+          "returnAllMatches": false
+        }
+      },
+      "id": "google-sheets-read",
+      "name": "Google Sheets Read",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [220, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "=== ใส่ Credential ID ===",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "url": "=http://emailhunter-searxng:8080/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.company_name }} email ติดต่อ"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "searxng-search",
+      "name": "SearXNG Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse SearXNG results — extract emails from snippets\nconst item = $input.first().json;\nconst companyName = items[0]?.$node?.['Split In Batches']?.json?.company_name || item.company_name || '';\nconst rowNumber = items[0]?.$node?.['Split In Batches']?.json?.row_number || item.row_number || '';\n\n// Email regex\nconst emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\n\n// Junk filter\nconst junkPrefixes = ['noreply@', 'no-reply@', 'example@', 'test@', 'user@', 'webmaster@', 'postmaster@'];\nconst junkDomains = ['@sentry.', '@wixpress.', '@placeholder.', '@example.'];\nconst junkExtensions = ['.png', '.jpg', '.gif', '.svg', '.webp'];\n\nfunction isJunkEmail(email) {\n  const lower = email.toLowerCase();\n  if (junkPrefixes.some(p => lower.startsWith(p))) return true;\n  if (junkDomains.some(d => lower.includes(d))) return true;\n  if (junkExtensions.some(ext => lower.endsWith(ext))) return true;\n  return false;\n}\n\n// Priority sort\nfunction emailPriority(email) {\n  const lower = email.toLowerCase();\n  if (lower.startsWith('info@')) return 1;\n  if (lower.startsWith('contact@')) return 2;\n  if (lower.startsWith('sales@')) return 3;\n  if (lower.startsWith('admin@')) return 4;\n  if (lower.startsWith('support@')) return 5;\n  return 6;\n}\n\n// Extract emails from search results\nlet allEmails = [];\nlet sourceUrl = '';\nlet urls = [];\n\nconst results = item.results || [];\nfor (const r of results) {\n  const text = (r.title || '') + ' ' + (r.content || '') + ' ' + (r.url || '');\n  const found = text.match(emailRegex) || [];\n  for (const e of found) {\n    if (!isJunkEmail(e) && !allEmails.includes(e.toLowerCase())) {\n      allEmails.push(e.toLowerCase());\n    }\n  }\n  if (r.url) urls.push(r.url);\n}\n\n// Sort by priority\nallEmails.sort((a, b) => emailPriority(a) - emailPriority(b));\n\nconst topEmail = allEmails[0] || '';\nif (topEmail && urls.length > 0) sourceUrl = urls[0];\n\nreturn [{\n  json: {\n    company_name: companyName,\n    row_number: rowNumber,\n    email: topEmail,\n    all_emails: allEmails.join(', '),\n    source_url: sourceUrl,\n    found_in_search: allEmails.length > 0,\n    top_urls: urls.slice(0, 5),\n    status: allEmails.length > 0 ? 'done' : 'need_fetch'\n  }\n}];"
+      },
+      "id": "parse-results",
+      "name": "Parse Search Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "found-email",
+              "leftValue": "={{ $json.found_in_search }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-found",
+      "name": "IF Found Email",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.top_urls[0] }}",
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 3
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-website",
+      "name": "Fetch Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract emails from fetched HTML page\nconst item = $input.first().json;\nconst html = item.data || item.body || JSON.stringify(item) || '';\nconst companyName = item.company_name || $('Parse Search Results').first().json.company_name || '';\nconst rowNumber = item.row_number || $('Parse Search Results').first().json.row_number || '';\nconst sourceUrl = item.top_urls?.[0] || $('Parse Search Results').first().json.top_urls?.[0] || '';\n\nconst emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\n\nconst junkPrefixes = ['noreply@', 'no-reply@', 'example@', 'test@', 'user@', 'webmaster@', 'postmaster@'];\nconst junkDomains = ['@sentry.', '@wixpress.', '@placeholder.', '@example.'];\nconst junkExtensions = ['.png', '.jpg', '.gif', '.svg', '.webp'];\n\nfunction isJunkEmail(email) {\n  const lower = email.toLowerCase();\n  if (junkPrefixes.some(p => lower.startsWith(p))) return true;\n  if (junkDomains.some(d => lower.includes(d))) return true;\n  if (junkExtensions.some(ext => lower.endsWith(ext))) return true;\n  return false;\n}\n\nfunction emailPriority(email) {\n  const lower = email.toLowerCase();\n  if (lower.startsWith('info@')) return 1;\n  if (lower.startsWith('contact@')) return 2;\n  if (lower.startsWith('sales@')) return 3;\n  if (lower.startsWith('admin@')) return 4;\n  if (lower.startsWith('support@')) return 5;\n  return 6;\n}\n\nlet allEmails = [];\nconst found = html.match(emailRegex) || [];\nfor (const e of found) {\n  if (!isJunkEmail(e) && !allEmails.includes(e.toLowerCase())) {\n    allEmails.push(e.toLowerCase());\n  }\n}\n\nallEmails.sort((a, b) => emailPriority(a) - emailPriority(b));\n\nconst topEmail = allEmails[0] || '';\nconst status = topEmail ? 'done' : 'not_found';\n\nreturn [{\n  json: {\n    company_name: companyName,\n    row_number: rowNumber,\n    email: topEmail,\n    all_emails: allEmails.join(', '),\n    source_url: sourceUrl,\n    status: status,\n    processed_date: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "extract-emails",
+      "name": "Extract Emails from Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format result for Google Sheets update (from search path)\nconst item = $input.first().json;\n\nreturn [{\n  json: {\n    company_name: item.company_name,\n    row_number: item.row_number,\n    email: item.email || '',\n    all_emails: item.all_emails || '',\n    source_url: item.source_url || '',\n    status: item.email ? 'done' : (item.status || 'not_found'),\n    processed_date: new Date().toISOString(),\n    error_message: ''\n  }\n}];"
+      },
+      "id": "format-search-result",
+      "name": "Format Result (Search)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, -200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=== ใส่ Google Sheet ID ที่นี่ ==="
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "status": "={{ $json.status }}",
+            "email": "={{ $json.email }}",
+            "all_emails": "={{ $json.all_emails }}",
+            "source_url": "={{ $json.source_url }}",
+            "processed_date": "={{ $json.processed_date }}"
+          },
+          "matchingColumns": ["row_number"]
+        },
+        "options": {}
+      },
+      "id": "google-sheets-update",
+      "name": "Google Sheets Update",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1980, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "=== ใส่ Credential ID ===",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Update Stats JSON\nconst fs = require('fs');\nconst statsPath = '/home/node/shared/stats.json';\n\nlet stats = {};\ntry {\n  stats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));\n} catch(e) {\n  stats = {\n    last_updated: \"\", total_companies: 0, processed: 0,\n    found: 0, not_found: 0, errors: 0, pending: 0,\n    success_rate: 0,\n    today: { date: \"\", processed: 0, found: 0 },\n    daily_history: [], recent: [], error_log: []\n  };\n}\n\n// Get data from previous item\nconst companyName = $input.first().json.company_name;\nconst email = $input.first().json.email || '';\nconst status = $input.first().json.status;\n\n// Update counters\nstats.last_updated = new Date().toISOString();\nstats.processed++;\n\nif (email) {\n  stats.found++;\n} else if (status === 'error') {\n  stats.errors++;\n} else {\n  stats.not_found++;\n}\n\nstats.pending = stats.total_companies - stats.processed;\nstats.success_rate = stats.processed > 0\n  ? ((stats.found / stats.processed) * 100).toFixed(1)\n  : 0;\n\n// Update today\nconst today = new Date().toISOString().split('T')[0];\nif (stats.today.date !== today) {\n  if (stats.today.date) stats.daily_history.unshift({...stats.today});\n  stats.today = { date: today, processed: 0, found: 0 };\n  stats.daily_history = stats.daily_history.slice(0, 30);\n}\nstats.today.processed++;\nif (email) stats.today.found++;\n\n// Update recent (last 50)\nstats.recent.unshift({\n  company: companyName,\n  email: email || '-',\n  status: status,\n  time: new Date().toLocaleTimeString('th-TH')\n});\nstats.recent = stats.recent.slice(0, 50);\n\n// Update error log\nif (status === 'error') {\n  stats.error_log.unshift({\n    company: companyName,\n    error: $input.first().json.error_message || 'Unknown error',\n    time: new Date().toLocaleTimeString('th-TH')\n  });\n  stats.error_log = stats.error_log.slice(0, 100);\n}\n\nfs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));\n\nreturn $input.all();"
+      },
+      "id": "update-stats",
+      "name": "Update Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "wait-delay",
+      "name": "Wait 3s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2420, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge node — collect from both paths (search found + page fetch)\nconst item = $input.first().json;\n\nreturn [{\n  json: {\n    company_name: item.company_name,\n    row_number: item.row_number,\n    email: item.email || '',\n    all_emails: item.all_emails || '',\n    source_url: item.source_url || '',\n    status: item.status || 'not_found',\n    processed_date: item.processed_date || new Date().toISOString(),\n    error_message: item.error_message || ''\n  }\n}];"
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 0],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Read": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "SearXNG Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SearXNG Search": {
+      "main": [
+        [
+          {
+            "node": "Parse Search Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Search Results": {
+      "main": [
+        [
+          {
+            "node": "IF Found Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Found Email": {
+      "main": [
+        [
+          {
+            "node": "Format Result (Search)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website": {
+      "main": [
+        [
+          {
+            "node": "Extract Emails from Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Emails from Page": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Result (Search)": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Update": {
+      "main": [
+        [
+          {
+            "node": "Update Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Stats": {
+      "main": [
+        [
+          {
+            "node": "Wait 3s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 3s": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Bangkok",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "EmailHunter"
+    }
+  ],
+  "triggerCount": 1,
+  "pinData": {}
+}

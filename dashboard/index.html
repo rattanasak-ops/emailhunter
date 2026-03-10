@@ -1,0 +1,1415 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EmailHunter Dashboard v2.0</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] },
+          colors: {
+            'eh-bg': '#0a0a0f',
+            'eh-card': '#12121a',
+            'eh-card-hover': '#1a1a2e',
+            'eh-border': '#1e1e3a',
+            'eh-green': '#00ff88',
+            'eh-blue': '#00d4ff',
+            'eh-purple': '#a855f7',
+            'eh-red': '#ff3366',
+            'eh-yellow': '#fbbf24',
+            'eh-text': '#e2e8f0',
+            'eh-text2': '#64748b',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      background: #0a0a0f;
+      color: #e2e8f0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* === Animated Background Orbs === */
+    .bg-orbs { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: hidden; }
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(80px);
+      opacity: 0.15;
+      animation: floatOrb 20s ease-in-out infinite;
+    }
+    .orb-1 { width: 400px; height: 400px; background: #00ff88; top: -100px; left: -100px; animation-delay: 0s; }
+    .orb-2 { width: 350px; height: 350px; background: #a855f7; bottom: -80px; right: -80px; animation-delay: -7s; animation-duration: 25s; }
+    .orb-3 { width: 300px; height: 300px; background: #00d4ff; top: 50%; left: 50%; transform: translate(-50%, -50%); animation-delay: -14s; animation-duration: 30s; }
+
+    @keyframes floatOrb {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      25% { transform: translate(60px, -40px) scale(1.1); }
+      50% { transform: translate(-30px, 60px) scale(0.9); }
+      75% { transform: translate(40px, 30px) scale(1.05); }
+    }
+
+    /* === Scan Line === */
+    .scanline {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 1;
+      background: linear-gradient(to bottom, transparent 0%, rgba(0,255,136,0.02) 50%, transparent 100%);
+      background-size: 100% 4px;
+      animation: scanMove 8s linear infinite;
+    }
+    @keyframes scanMove {
+      0% { background-position: 0 -100vh; }
+      100% { background-position: 0 100vh; }
+    }
+
+    /* === Card Styles === */
+    .card {
+      background: rgba(18, 18, 26, 0.8);
+      border: 1px solid #1e1e3a;
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+    .card:hover {
+      background: rgba(26, 26, 46, 0.9);
+      border-color: rgba(0, 255, 136, 0.3);
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.05);
+    }
+
+    /* === Glow Number === */
+    .glow-green { text-shadow: 0 0 20px rgba(0, 255, 136, 0.5), 0 0 40px rgba(0, 255, 136, 0.2); }
+    .glow-blue { text-shadow: 0 0 20px rgba(0, 212, 255, 0.5), 0 0 40px rgba(0, 212, 255, 0.2); }
+    .glow-purple { text-shadow: 0 0 20px rgba(168, 85, 247, 0.5), 0 0 40px rgba(168, 85, 247, 0.2); }
+    .glow-red { text-shadow: 0 0 20px rgba(255, 51, 102, 0.5), 0 0 40px rgba(255, 51, 102, 0.2); }
+    .glow-yellow { text-shadow: 0 0 20px rgba(251, 191, 36, 0.5), 0 0 40px rgba(251, 191, 36, 0.2); }
+    .glow-cyan { text-shadow: 0 0 20px rgba(34, 211, 238, 0.5), 0 0 40px rgba(34, 211, 238, 0.2); }
+
+    /* === Progress Bar === */
+    .progress-bar-bg {
+      background: #1e1e3a;
+      border-radius: 16px;
+      height: 32px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 16px;
+      background: linear-gradient(90deg, #00ff88, #00d4ff, #a855f7);
+      background-size: 200% 100%;
+      animation: gradientShift 3s ease-in-out infinite;
+      transition: width 1s ease;
+      position: relative;
+    }
+    .progress-bar-fill::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+      animation: shimmer 2s ease-in-out infinite;
+    }
+    @keyframes gradientShift {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* === Pulse Dot === */
+    .pulse-dot {
+      width: 8px; height: 8px;
+      background: #00ff88;
+      border-radius: 50%;
+      display: inline-block;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .pulse-dot-idle { background: #fbbf24; animation: pulseIdle 2s ease-in-out infinite; }
+    .pulse-dot-paused { background: #ff3366; animation: none; }
+    .pulse-dot-offline { background: #64748b; animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+      50% { box-shadow: 0 0 0 8px rgba(0, 255, 136, 0); }
+    }
+    @keyframes pulseIdle {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7); }
+      50% { box-shadow: 0 0 0 8px rgba(251, 191, 36, 0); }
+    }
+
+    /* === Status Badge === */
+    .badge-done { background: rgba(0,255,136,0.15); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); }
+    .badge-not-found { background: rgba(255,51,102,0.15); color: #ff3366; border: 1px solid rgba(255,51,102,0.3); }
+    .badge-error { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+    .badge-retry { background: rgba(251,146,60,0.15); color: #fb923c; border: 1px solid rgba(251,146,60,0.3); }
+    .badge-pending { background: rgba(100,116,139,0.15); color: #64748b; border: 1px solid rgba(100,116,139,0.3); }
+    .badge-search { background: rgba(0,212,255,0.15); color: #00d4ff; border: 1px solid rgba(0,212,255,0.3); }
+    .badge-website { background: rgba(168,85,247,0.15); color: #a855f7; border: 1px solid rgba(168,85,247,0.3); }
+
+    /* === Scrollbar === */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0a0a0f; }
+    ::-webkit-scrollbar-thumb { background: #1e1e3a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #2e2e4a; }
+
+    /* === Table === */
+    .activity-table { max-height: 400px; overflow-y: auto; }
+    .activity-table table { width: 100%; border-collapse: collapse; }
+    .activity-table th { position: sticky; top: 0; background: #12121a; z-index: 2; text-align: left; padding: 10px 12px; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #1e1e3a; }
+    .activity-table td { padding: 8px 12px; border-bottom: 1px solid rgba(30,30,58,0.5); font-size: 12px; }
+    .activity-table tr:nth-child(even) { background: rgba(18,18,26,0.5); }
+    .activity-table tr:hover { background: rgba(26,26,46,0.6); }
+
+    .error-table { max-height: 300px; overflow-y: auto; }
+    .error-table table { width: 100%; border-collapse: collapse; }
+    .error-table th { position: sticky; top: 0; background: #12121a; z-index: 2; text-align: left; padding: 10px 12px; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #1e1e3a; }
+    .error-table td { padding: 8px 12px; border-bottom: 1px solid rgba(30,30,58,0.5); font-size: 12px; }
+    .error-table tr:nth-child(even) { background: rgba(18,18,26,0.5); }
+    .error-table tr:hover { background: rgba(26,26,46,0.6); }
+
+    /* === Stat Card Border Colors === */
+    .border-l-green { border-left: 3px solid #00ff88; }
+    .border-l-blue { border-left: 3px solid #00d4ff; }
+    .border-l-purple { border-left: 3px solid #a855f7; }
+    .border-l-red { border-left: 3px solid #ff3366; }
+    .border-l-yellow { border-left: 3px solid #fbbf24; }
+    .border-l-cyan { border-left: 3px solid #22d3ee; }
+
+    /* === Session Timeline === */
+    .session-timeline {
+      position: relative;
+      height: 40px;
+      background: #1e1e3a;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .session-timeline-fill {
+      height: 100%;
+      background: linear-gradient(90deg, rgba(0,255,136,0.4), rgba(0,255,136,0.6));
+      border-radius: 20px 0 0 20px;
+      transition: width 1s linear;
+      position: relative;
+    }
+    .session-timeline-fill::after {
+      content: '';
+      position: absolute;
+      right: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: #00ff88;
+      box-shadow: 0 0 10px #00ff88, 0 0 20px rgba(0,255,136,0.5);
+    }
+    .session-timeline-marker {
+      position: absolute;
+      top: -8px;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: #00ff88;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    /* === Speed Gauge === */
+    .speed-gauge {
+      font-size: 3rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .speed-gauge.speed-good { color: #00ff88; text-shadow: 0 0 30px rgba(0,255,136,0.4); }
+    .speed-gauge.speed-mid { color: #fbbf24; text-shadow: 0 0 30px rgba(251,191,36,0.4); }
+    .speed-gauge.speed-slow { color: #ff3366; text-shadow: 0 0 30px rgba(255,51,102,0.4); }
+
+    /* === Shield Status === */
+    .shield-status { position: relative; }
+    .shield-icon {
+      width: 48px; height: 48px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 12px;
+      font-size: 24px;
+    }
+    .shield-normal { background: rgba(0,255,136,0.15); color: #00ff88; }
+    .shield-throttled { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .shield-paused { background: rgba(255,51,102,0.15); color: #ff3366; }
+
+    /* === Upload Zone === */
+    .upload-zone {
+      border: 2px dashed #1e1e3a;
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: rgba(18,18,26,0.4);
+    }
+    .upload-zone:hover {
+      border-color: rgba(0,255,136,0.3);
+      background: rgba(18,18,26,0.6);
+    }
+    .upload-zone.dragover {
+      border-color: #00ff88;
+      background: rgba(0,255,136,0.05);
+      box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    }
+
+    /* === Upload Progress === */
+    .upload-progress-bar {
+      height: 4px;
+      background: #1e1e3a;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .upload-progress-fill {
+      height: 100%;
+      background: #00ff88;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    /* === Responsive === */
+    @media (max-width: 768px) {
+      .stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
+      .chart-grid { grid-template-columns: 1fr !important; }
+      .bottom-grid { grid-template-columns: 1fr !important; }
+      .monitor-grid { grid-template-columns: 1fr !important; }
+      .data-grid { grid-template-columns: 1fr !important; }
+      .speed-gauge { font-size: 2rem; }
+    }
+    @media (max-width: 480px) {
+      .stat-grid { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Background Effects -->
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+  <div class="scanline"></div>
+
+  <!-- Main Content -->
+  <div class="relative z-10 max-w-7xl mx-auto px-4 py-6">
+
+    <!-- ============================================================ -->
+    <!-- 1. Header -->
+    <!-- ============================================================ -->
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">
+          <span class="text-eh-green">Email</span><span class="text-eh-text">Hunter</span>
+        </h1>
+        <p class="text-eh-text2 text-xs mt-1">v2.0 &mdash; Smart Anti-Block Engine</p>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <!-- Schedule Indicator -->
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-eh-card border border-eh-border text-xs">
+          <svg class="w-3.5 h-3.5 text-eh-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-eh-text2">Session:</span>
+          <span class="text-eh-blue font-medium">01:00-09:00</span>
+          <span class="text-eh-text2">|</span>
+          <span id="currentTime" class="text-eh-text font-medium">--:--</span>
+        </div>
+        <!-- Status Badge -->
+        <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-eh-card border border-eh-border text-xs">
+          <span class="pulse-dot"></span>
+          <span id="statusText" class="text-eh-green font-medium">Running</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ============================================================ -->
+    <!-- 2. KPI Stat Cards -->
+    <!-- ============================================================ -->
+    <div class="stat-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      <!-- Total Companies -->
+      <div class="card p-4 border-l-blue">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-eh-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">Total</span>
+        </div>
+        <div id="statTotal" class="text-2xl font-bold text-eh-blue glow-blue counter" data-target="0">0</div>
+        <div class="text-eh-text2 text-[10px] mt-1">บริษัททั้งหมด</div>
+      </div>
+
+      <!-- Processed -->
+      <div class="card p-4 border-l-purple">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-eh-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">Done</span>
+        </div>
+        <div id="statProcessed" class="text-2xl font-bold text-eh-purple glow-purple counter" data-target="0">0</div>
+        <div class="text-eh-text2 text-[10px] mt-1">ประมวลผลแล้ว</div>
+      </div>
+
+      <!-- Found -->
+      <div class="card p-4 border-l-green">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-eh-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">Found</span>
+        </div>
+        <div id="statFound" class="text-2xl font-bold text-eh-green glow-green counter" data-target="0">0</div>
+        <div class="text-eh-text2 text-[10px] mt-1">เจอ email</div>
+      </div>
+
+      <!-- Not Found -->
+      <div class="card p-4 border-l-red">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-eh-red" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">Not Found</span>
+        </div>
+        <div id="statNotFound" class="text-2xl font-bold text-eh-red glow-red counter" data-target="0">0</div>
+        <div class="text-eh-text2 text-[10px] mt-1">ไม่เจอ</div>
+      </div>
+
+      <!-- Success Rate -->
+      <div class="card p-4 border-l-yellow">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-eh-yellow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">Rate</span>
+        </div>
+        <div id="statRate" class="text-2xl font-bold text-eh-yellow glow-yellow counter" data-target="0">0%</div>
+        <div class="text-eh-text2 text-[10px] mt-1">อัตราสำเร็จ</div>
+      </div>
+
+      <!-- ETA -->
+      <div class="card p-4 border-l-cyan">
+        <div class="flex items-center gap-2 mb-2">
+          <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-eh-text2 text-[10px] uppercase tracking-wider">ETA</span>
+        </div>
+        <div id="statEta" class="text-2xl font-bold text-cyan-400 glow-cyan">-</div>
+        <div class="text-eh-text2 text-[10px] mt-1">เวลาที่เหลือ</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 3. Session Timeline -->
+    <!-- ============================================================ -->
+    <div class="card p-5 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-medium text-eh-text2 uppercase tracking-wider">Session Timeline</h3>
+        <span id="sessionStatus" class="text-xs text-eh-green font-medium">Active</span>
+      </div>
+      <!-- Timeline Bar -->
+      <div class="relative mb-2">
+        <div class="flex justify-between text-[10px] text-eh-text2 mb-1 px-1">
+          <span>01:00</span>
+          <span>03:00</span>
+          <span>05:00</span>
+          <span>07:00</span>
+          <span>09:00</span>
+        </div>
+        <div class="session-timeline">
+          <div id="sessionFill" class="session-timeline-fill" style="width: 0%"></div>
+        </div>
+      </div>
+      <!-- Session Info -->
+      <div id="sessionInfo" class="flex flex-wrap items-center gap-4 mt-3 text-xs text-eh-text2">
+        <span id="sessionTimeText">Now: --:--</span>
+        <span class="text-eh-border">|</span>
+        <span id="sessionProcessed">0 processed</span>
+        <span class="text-eh-border">|</span>
+        <span id="sessionSpeed">0/min</span>
+        <span class="text-eh-border">|</span>
+        <span id="sessionBlocks">0 blocks</span>
+      </div>
+      <!-- Countdown (shown when outside session) -->
+      <div id="sessionCountdown" class="text-center text-sm text-eh-text2 mt-2 hidden">
+        <span>Session ถัดไปเริ่ม 01:00 &mdash; อีก </span>
+        <span id="countdownTimer" class="text-eh-blue font-medium">--:--:--</span>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 4. Speed & Anti-Block Monitor -->
+    <!-- ============================================================ -->
+    <div class="monitor-grid grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <!-- Speed Gauge -->
+      <div class="card p-5">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Speed Monitor</h3>
+        <div class="flex items-end gap-4">
+          <div>
+            <div id="speedGauge" class="speed-gauge speed-good">0.0</div>
+            <div class="text-eh-text2 text-xs mt-1">companies/min</div>
+          </div>
+          <div class="flex-1 mb-2">
+            <div class="flex items-center gap-2 text-xs text-eh-text2 mb-1">
+              <span>Avg:</span>
+              <span id="speedAvg" class="text-eh-text font-medium">0.0/min</span>
+            </div>
+            <div class="flex items-center gap-2 text-xs text-eh-text2">
+              <span>Trend:</span>
+              <span id="speedTrend" class="text-eh-green font-medium">--</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Anti-Block Status -->
+      <div class="card p-5 shield-status">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Anti-Block Status</h3>
+        <div class="flex items-start gap-4">
+          <div id="shieldIcon" class="shield-icon shield-normal">
+            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L3 7v5c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12.99H5V8.26l7-3.89v8.62z"/></svg>
+          </div>
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs text-eh-text2">Status:</span>
+              <span id="antiBlockStatus" class="text-sm font-medium text-eh-green">Normal</span>
+            </div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs text-eh-text2">Queries until break:</span>
+              <span id="queriesUntilBreak" class="text-xs text-eh-text font-medium">-</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-eh-text2">Blocks today:</span>
+              <span id="blocksToday" class="text-xs text-eh-text font-medium">0</span>
+            </div>
+          </div>
+        </div>
+        <!-- Block warning -->
+        <div id="blockWarning" class="hidden mt-3 px-3 py-2 rounded-lg bg-eh-red/10 border border-eh-red/30 text-eh-red text-xs">
+          Block detected! Anti-block engine is adjusting delays.
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 5. Progress Bar -->
+    <!-- ============================================================ -->
+    <div class="card p-4 mb-6">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-eh-text2 text-xs">ความคืบหน้า</span>
+        <span id="progressText" class="text-eh-green text-xs font-medium">0% (0 / 0)</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div id="progressFill" class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 6. Charts -->
+    <!-- ============================================================ -->
+    <div class="chart-grid grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <!-- Daily Trend Bar Chart -->
+      <div class="card p-5">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Daily Trend (14 วัน)</h3>
+        <div style="height: 250px;">
+          <canvas id="dailyChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Success Rate Donut Chart -->
+      <div class="card p-5">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Success Rate</h3>
+        <div class="flex items-center justify-center" style="height: 250px;">
+          <canvas id="donutChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 7. Recent Activity Table -->
+    <!-- ============================================================ -->
+    <div class="card p-5 mb-6">
+      <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Recent Activity</h3>
+      <div class="activity-table" id="activityTable">
+        <table>
+          <thead>
+            <tr>
+              <th>เวลา</th>
+              <th>บริษัท</th>
+              <th>Email</th>
+              <th>สถานะ</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody id="activityBody">
+            <tr><td colspan="5" class="text-center text-eh-text2 py-8">รอข้อมูล...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 8. Error Log Table -->
+    <!-- ============================================================ -->
+    <div class="card p-5 mb-6" style="border-left: 3px solid #ff3366;">
+      <h3 class="text-sm font-medium text-eh-red mb-4 uppercase tracking-wider">Error Log</h3>
+      <div class="error-table" id="errorTable">
+        <table>
+          <thead>
+            <tr>
+              <th>เวลา</th>
+              <th>บริษัท</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="errorBody">
+            <tr><td colspan="3" class="text-center text-eh-text2 py-8">ไม่มี error</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 9. Data Management Section -->
+    <!-- ============================================================ -->
+    <div class="data-grid grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <!-- Upload Excel -->
+      <div class="card p-5">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Upload Excel</h3>
+        <div id="uploadZone" class="upload-zone">
+          <svg class="w-10 h-10 mx-auto mb-3 text-eh-text2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+          <p class="text-sm text-eh-text2 mb-1">ลากไฟล์มาวางที่นี่ หรือ คลิกเลือก</p>
+          <p class="text-[10px] text-eh-text2">รองรับ .xlsx, .xls</p>
+          <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
+        </div>
+        <!-- Selected file info -->
+        <div id="fileInfo" class="hidden mt-3 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-xs">
+            <svg class="w-4 h-4 text-eh-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            <span id="fileName" class="text-eh-text font-medium truncate max-w-[200px]"></span>
+          </div>
+          <button id="uploadBtn" onclick="doUpload()" class="px-4 py-1.5 bg-eh-green/20 text-eh-green border border-eh-green/30 rounded-lg text-xs font-medium hover:bg-eh-green/30 transition-colors">
+            Upload
+          </button>
+        </div>
+        <!-- Upload progress -->
+        <div id="uploadProgress" class="hidden">
+          <div class="upload-progress-bar">
+            <div id="uploadProgressFill" class="upload-progress-fill" style="width: 0%"></div>
+          </div>
+          <p id="uploadStatusText" class="text-xs text-eh-text2 mt-2 text-center">Uploading...</p>
+        </div>
+        <!-- Upload result -->
+        <div id="uploadResult" class="hidden mt-3 px-3 py-2 rounded-lg bg-eh-green/10 border border-eh-green/30 text-xs">
+          <span id="uploadResultText" class="text-eh-green"></span>
+        </div>
+      </div>
+
+      <!-- Export Results -->
+      <div class="card p-5">
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Export Results</h3>
+        <div class="flex flex-col items-center justify-center py-6">
+          <div class="text-eh-text2 text-xs mb-1">Records พร้อม export</div>
+          <div id="exportCount" class="text-3xl font-bold text-eh-blue glow-blue mb-6">0</div>
+          <div class="flex gap-3">
+            <a id="exportCsvBtn" href="/api/export?format=csv" class="flex items-center gap-2 px-5 py-2 bg-eh-green/20 text-eh-green border border-eh-green/30 rounded-lg text-sm font-medium hover:bg-eh-green/30 transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              CSV
+            </a>
+            <a id="exportJsonBtn" href="/api/export?format=json" class="flex items-center gap-2 px-5 py-2 bg-eh-blue/20 text-eh-blue border border-eh-blue/30 rounded-lg text-sm font-medium hover:bg-eh-blue/30 transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              JSON
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 10. Footer -->
+    <!-- ============================================================ -->
+    <footer class="text-center text-eh-text2 text-xs py-4 border-t border-eh-border">
+      <span id="lastUpdated">Last updated: -</span>
+      <span class="mx-2">|</span>
+      <span>Auto-refresh: 15s</span>
+      <span class="mx-2">|</span>
+      <span id="todayStats">Today: 0 processed, 0 found</span>
+      <span class="mx-2">|</span>
+      <span>v2.0</span>
+    </footer>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- JavaScript -->
+  <!-- ============================================================ -->
+  <script>
+    // ============================================================
+    // EmailHunter Dashboard v2.0 — JavaScript
+    // ============================================================
+
+    let dailyChart = null;
+    let donutChart = null;
+    let isFirstLoad = true;
+    let lastData = null;
+    let selectedFile = null;
+
+    // ============================================================
+    // XSS Prevention
+    // ============================================================
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      const s = String(str);
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    // ============================================================
+    // Number Formatting
+    // ============================================================
+    function formatNumber(n) {
+      if (n === null || n === undefined) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return n.toLocaleString('th-TH');
+    }
+
+    function formatSpeed(n) {
+      if (n === null || n === undefined) return '0.0';
+      return parseFloat(n).toFixed(1);
+    }
+
+    // ============================================================
+    // Counter Animation (easeOutCubic)
+    // ============================================================
+    function animateCounter(el, target, suffix) {
+      suffix = suffix || '';
+      const duration = 1500;
+      const start = parseInt(String(el.textContent).replace(/[^0-9]/g, '')) || 0;
+      const diff = target - start;
+      if (diff === 0) { el.textContent = formatNumber(target) + suffix; return; }
+
+      const startTime = performance.now();
+      function tick(now) {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = Math.round(start + diff * eased);
+        el.textContent = formatNumber(current) + suffix;
+        if (progress < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    // ============================================================
+    // Session Timeline
+    // ============================================================
+    function getSessionProgress() {
+      const now = new Date();
+      const hours = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+      if (hours >= 1 && hours <= 9) {
+        return { active: true, progress: ((hours - 1) / 8) * 100, hours: hours };
+      }
+      // Calculate time until next 01:00
+      let nextStart;
+      if (hours > 9) {
+        // Next day 01:00
+        nextStart = new Date(now);
+        nextStart.setDate(nextStart.getDate() + 1);
+        nextStart.setHours(1, 0, 0, 0);
+      } else {
+        // Today 01:00
+        nextStart = new Date(now);
+        nextStart.setHours(1, 0, 0, 0);
+      }
+      const diffMs = nextStart - now;
+      return { active: false, nextStartMs: diffMs };
+    }
+
+    function updateSessionTimeline() {
+      const session = getSessionProgress();
+      const fillEl = document.getElementById('sessionFill');
+      const statusEl = document.getElementById('sessionStatus');
+      const infoEl = document.getElementById('sessionInfo');
+      const countdownEl = document.getElementById('sessionCountdown');
+      const timeTextEl = document.getElementById('sessionTimeText');
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      if (session.active) {
+        fillEl.style.width = Math.min(session.progress, 100) + '%';
+        statusEl.textContent = 'Active';
+        statusEl.className = 'text-xs text-eh-green font-medium';
+        infoEl.classList.remove('hidden');
+        countdownEl.classList.add('hidden');
+        timeTextEl.textContent = 'Now: ' + timeStr + ' (' + session.progress.toFixed(1) + '%)';
+      } else {
+        fillEl.style.width = '0%';
+        statusEl.textContent = 'Inactive';
+        statusEl.className = 'text-xs text-eh-text2 font-medium';
+        infoEl.classList.add('hidden');
+        countdownEl.classList.remove('hidden');
+
+        // Format countdown
+        const totalSec = Math.floor(session.nextStartMs / 1000);
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        const countdownStr = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        document.getElementById('countdownTimer').textContent = countdownStr;
+      }
+
+      // Update header clock
+      document.getElementById('currentTime').textContent = now.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Update timeline every second
+    setInterval(updateSessionTimeline, 1000);
+    updateSessionTimeline();
+
+    // ============================================================
+    // Status Badge Helpers
+    // ============================================================
+    function createStatusBadge(status) {
+      const span = document.createElement('span');
+      span.className = 'px-2 py-0.5 rounded text-[10px] font-medium ';
+      switch (status) {
+        case 'done':
+          span.className += 'badge-done';
+          span.textContent = 'done';
+          break;
+        case 'not_found':
+          span.className += 'badge-not-found';
+          span.textContent = 'not found';
+          break;
+        case 'error':
+          span.className += 'badge-error';
+          span.textContent = 'error';
+          break;
+        case 'retry':
+          span.className += 'badge-retry';
+          span.textContent = 'retry';
+          break;
+        default:
+          span.className += 'badge-pending';
+          span.textContent = status || 'pending';
+          break;
+      }
+      return span;
+    }
+
+    function createSourceBadge(source) {
+      const span = document.createElement('span');
+      span.className = 'px-2 py-0.5 rounded text-[10px] font-medium ';
+      if (source === 'search') {
+        span.className += 'badge-search';
+        span.textContent = 'search';
+      } else if (source === 'website') {
+        span.className += 'badge-website';
+        span.textContent = 'website';
+      } else {
+        span.className += 'badge-pending';
+        span.textContent = source || '-';
+      }
+      return span;
+    }
+
+    // ============================================================
+    // Calculate ETA
+    // ============================================================
+    function calcEta(stats) {
+      if (!stats) return '-';
+      const processed = stats.processed || 0;
+      const total = stats.total_companies || 0;
+      const remaining = total - processed;
+      if (remaining <= 0) return 'Done!';
+
+      // Use average speed if available, otherwise estimate from today
+      const avgSpeed = stats.avg_speed || (stats.today ? stats.today.processed : 0);
+      if (!avgSpeed || avgSpeed <= 0) return '-';
+
+      // 480 minutes per day (8 hours session)
+      const minutesPerDay = 480;
+      const daysNeeded = remaining / (avgSpeed * minutesPerDay);
+
+      if (daysNeeded < 1) return '< 1 day';
+      if (daysNeeded < 30) return Math.ceil(daysNeeded) + ' days';
+      const months = (daysNeeded / 30).toFixed(1);
+      return months + ' mo';
+    }
+
+    // ============================================================
+    // Update Dashboard
+    // ============================================================
+    function updateDashboard(data) {
+      if (!data) return;
+      lastData = data;
+
+      // --- KPI Cards ---
+      const elTotal = document.getElementById('statTotal');
+      const elProcessed = document.getElementById('statProcessed');
+      const elFound = document.getElementById('statFound');
+      const elNotFound = document.getElementById('statNotFound');
+      const elRate = document.getElementById('statRate');
+      const elEta = document.getElementById('statEta');
+
+      if (isFirstLoad) {
+        animateCounter(elTotal, data.total_companies || 0);
+        animateCounter(elProcessed, data.processed || 0);
+        animateCounter(elFound, data.found || 0);
+        animateCounter(elNotFound, data.not_found || 0);
+        animateCounter(elRate, parseFloat(data.success_rate) || 0, '%');
+        isFirstLoad = false;
+      } else {
+        elTotal.textContent = formatNumber(data.total_companies || 0);
+        elProcessed.textContent = formatNumber(data.processed || 0);
+        elFound.textContent = formatNumber(data.found || 0);
+        elNotFound.textContent = formatNumber(data.not_found || 0);
+        elRate.textContent = (parseFloat(data.success_rate) || 0).toFixed(1) + '%';
+      }
+      elEta.textContent = calcEta(data);
+
+      // --- Session Info ---
+      const sessionProcessedEl = document.getElementById('sessionProcessed');
+      const sessionSpeedEl = document.getElementById('sessionSpeed');
+      const sessionBlocksEl = document.getElementById('sessionBlocks');
+      sessionProcessedEl.textContent = formatNumber(data.today ? data.today.processed : 0) + ' processed';
+      sessionSpeedEl.textContent = formatSpeed(data.current_speed || data.avg_speed || 0) + '/min';
+      const blocks = (data.anti_block ? data.anti_block.blocks_today : 0) || 0;
+      sessionBlocksEl.textContent = blocks + ' blocks';
+      if (blocks > 0) {
+        sessionBlocksEl.style.color = '#ff3366';
+      } else {
+        sessionBlocksEl.style.color = '';
+      }
+
+      // --- Speed Gauge ---
+      const speed = parseFloat(data.current_speed || data.avg_speed || 0);
+      const speedEl = document.getElementById('speedGauge');
+      speedEl.textContent = formatSpeed(speed);
+      speedEl.className = 'speed-gauge ';
+      if (speed >= 4) {
+        speedEl.className += 'speed-good';
+      } else if (speed >= 2) {
+        speedEl.className += 'speed-mid';
+      } else {
+        speedEl.className += 'speed-slow';
+      }
+
+      document.getElementById('speedAvg').textContent = formatSpeed(data.avg_speed || 0) + '/min';
+
+      // Speed trend
+      const trendEl = document.getElementById('speedTrend');
+      const trend = data.speed_trend || 'stable';
+      if (trend === 'increasing' || trend === 'up') {
+        trendEl.textContent = 'Increasing';
+        trendEl.style.color = '#00ff88';
+      } else if (trend === 'decreasing' || trend === 'down') {
+        trendEl.textContent = 'Decreasing';
+        trendEl.style.color = '#ff3366';
+      } else {
+        trendEl.textContent = 'Stable';
+        trendEl.style.color = '#fbbf24';
+      }
+
+      // --- Anti-Block Status ---
+      const ab = data.anti_block || {};
+      const abStatus = ab.status || 'normal';
+      const abStatusEl = document.getElementById('antiBlockStatus');
+      const shieldEl = document.getElementById('shieldIcon');
+      const blockWarningEl = document.getElementById('blockWarning');
+
+      if (abStatus === 'throttled') {
+        abStatusEl.textContent = 'Throttled';
+        abStatusEl.style.color = '#fbbf24';
+        shieldEl.className = 'shield-icon shield-throttled';
+      } else if (abStatus === 'paused') {
+        abStatusEl.textContent = 'Paused';
+        abStatusEl.style.color = '#ff3366';
+        shieldEl.className = 'shield-icon shield-paused';
+      } else {
+        abStatusEl.textContent = 'Normal';
+        abStatusEl.style.color = '#00ff88';
+        shieldEl.className = 'shield-icon shield-normal';
+      }
+
+      document.getElementById('queriesUntilBreak').textContent = ab.queries_until_break != null ? ab.queries_until_break : '-';
+      document.getElementById('blocksToday').textContent = blocks;
+
+      if (blocks > 0) {
+        blockWarningEl.classList.remove('hidden');
+      } else {
+        blockWarningEl.classList.add('hidden');
+      }
+
+      // --- Progress Bar ---
+      const total = data.total_companies || 1;
+      const pct = ((data.processed || 0) / total * 100).toFixed(1);
+      document.getElementById('progressFill').style.width = pct + '%';
+      document.getElementById('progressText').textContent =
+        pct + '% (' + formatNumber(data.processed || 0) + ' / ' + formatNumber(data.total_companies || 0) + ')';
+
+      // --- Charts ---
+      updateDailyChart(data);
+      updateDonutChart(data);
+
+      // --- Tables ---
+      updateActivityTable(data.recent || []);
+      updateErrorTable(data.error_log || []);
+
+      // --- Export count ---
+      document.getElementById('exportCount').textContent = formatNumber(data.found || 0);
+
+      // --- Footer ---
+      const lastUp = data.last_updated ? new Date(data.last_updated).toLocaleString('th-TH') : '-';
+      document.getElementById('lastUpdated').textContent = 'Last updated: ' + lastUp;
+      document.getElementById('todayStats').textContent =
+        'Today: ' + (data.today ? data.today.processed : 0) + ' processed, ' + (data.today ? data.today.found : 0) + ' found';
+
+      // --- Status badge ---
+      updateStatusBadge(data);
+    }
+
+    // ============================================================
+    // Status Badge
+    // ============================================================
+    function updateStatusBadge(data) {
+      const dotEl = document.querySelector('#statusBadge .pulse-dot');
+      const textEl = document.getElementById('statusText');
+      if (!dotEl || !textEl) return;
+
+      const status = data.status || 'unknown';
+
+      if (status === 'running') {
+        dotEl.className = 'pulse-dot';
+        textEl.textContent = 'Running';
+        textEl.className = 'text-eh-green font-medium';
+      } else if (status === 'paused') {
+        dotEl.className = 'pulse-dot pulse-dot-paused';
+        textEl.textContent = 'Paused';
+        textEl.className = 'text-eh-red font-medium';
+      } else if (status === 'idle') {
+        dotEl.className = 'pulse-dot pulse-dot-idle';
+        textEl.textContent = 'Idle';
+        textEl.className = 'text-eh-yellow font-medium';
+      } else {
+        // Fallback: check last_updated
+        if (data.last_updated) {
+          const diff = Date.now() - new Date(data.last_updated).getTime();
+          if (diff > 3600000) {
+            dotEl.className = 'pulse-dot pulse-dot-idle';
+            textEl.textContent = 'Idle';
+            textEl.className = 'text-eh-yellow font-medium';
+          } else {
+            dotEl.className = 'pulse-dot';
+            textEl.textContent = 'Running';
+            textEl.className = 'text-eh-green font-medium';
+          }
+        }
+      }
+    }
+
+    function showOfflineStatus() {
+      const dotEl = document.querySelector('#statusBadge .pulse-dot');
+      const textEl = document.getElementById('statusText');
+      if (dotEl) dotEl.className = 'pulse-dot pulse-dot-offline';
+      if (textEl) {
+        textEl.textContent = 'Offline';
+        textEl.className = 'text-eh-text2 font-medium';
+      }
+    }
+
+    // ============================================================
+    // Charts
+    // ============================================================
+    const chartDefaults = {
+      tooltipStyle: {
+        backgroundColor: '#12121a',
+        borderColor: '#1e1e3a',
+        borderWidth: 1,
+        titleFont: { family: 'JetBrains Mono' },
+        bodyFont: { family: 'JetBrains Mono' },
+        titleColor: '#e2e8f0',
+        bodyColor: '#e2e8f0',
+      },
+      fontStyle: { family: 'JetBrains Mono', size: 10 },
+      gridColor: 'rgba(30,30,58,0.5)',
+    };
+
+    function updateDailyChart(data) {
+      const history = [...(data.daily_history || [])].reverse().slice(-13);
+      if (data.today && data.today.date) history.push(data.today);
+
+      const labels = history.map(function(d) { return d.date ? d.date.slice(5) : ''; });
+      const processed = history.map(function(d) { return d.processed || 0; });
+      const found = history.map(function(d) { return d.found || 0; });
+
+      if (dailyChart) {
+        dailyChart.data.labels = labels;
+        dailyChart.data.datasets[0].data = processed;
+        dailyChart.data.datasets[1].data = found;
+        dailyChart.update('none');
+      } else {
+        var ctx = document.getElementById('dailyChart');
+        if (!ctx) return;
+        dailyChart = new Chart(ctx.getContext('2d'), {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Processed',
+                data: processed,
+                backgroundColor: 'rgba(168, 85, 247, 0.6)',
+                borderColor: '#a855f7',
+                borderWidth: 1,
+                borderRadius: 4,
+              },
+              {
+                label: 'Found',
+                data: found,
+                backgroundColor: 'rgba(0, 255, 136, 0.6)',
+                borderColor: '#00ff88',
+                borderWidth: 1,
+                borderRadius: 4,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                labels: { color: '#64748b', font: chartDefaults.fontStyle }
+              },
+              tooltip: chartDefaults.tooltipStyle,
+            },
+            scales: {
+              x: { ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } },
+              y: { ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } }
+            }
+          }
+        });
+      }
+    }
+
+    function updateDonutChart(data) {
+      const found = data.found || 0;
+      const notFound = data.not_found || 0;
+      const errors = data.errors || 0;
+      const total = found + notFound + errors || 1;
+
+      if (donutChart) {
+        donutChart.data.datasets[0].data = [found, notFound, errors];
+        donutChart.update('none');
+      } else {
+        var ctx = document.getElementById('donutChart');
+        if (!ctx) return;
+        donutChart = new Chart(ctx.getContext('2d'), {
+          type: 'doughnut',
+          data: {
+            labels: ['Found', 'Not Found', 'Errors'],
+            datasets: [{
+              data: [found, notFound, errors],
+              backgroundColor: ['#00ff88', '#ff3366', '#fbbf24'],
+              borderColor: '#12121a',
+              borderWidth: 3,
+              hoverOffset: 8,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '65%',
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: { color: '#64748b', font: chartDefaults.fontStyle, padding: 16, usePointStyle: true, pointStyleWidth: 8 }
+              },
+              tooltip: {
+                ...chartDefaults.tooltipStyle,
+                callbacks: {
+                  label: function(ctx) {
+                    var pct = ((ctx.parsed / total) * 100).toFixed(1);
+                    return ctx.label + ': ' + formatNumber(ctx.parsed) + ' (' + pct + '%)';
+                  }
+                }
+              }
+            }
+          }
+        });
+      }
+    }
+
+    // ============================================================
+    // Tables (XSS-safe using DOM manipulation)
+    // ============================================================
+    function updateActivityTable(recent) {
+      var tbody = document.getElementById('activityBody');
+      if (!tbody) return;
+
+      // Clear existing rows
+      tbody.textContent = '';
+
+      if (!recent || !recent.length) {
+        var emptyRow = document.createElement('tr');
+        var emptyTd = document.createElement('td');
+        emptyTd.setAttribute('colspan', '5');
+        emptyTd.className = 'text-center text-eh-text2 py-8';
+        emptyTd.textContent = 'รอข้อมูล...';
+        emptyRow.appendChild(emptyTd);
+        tbody.appendChild(emptyRow);
+        return;
+      }
+
+      var items = recent.slice(0, 20);
+      for (var i = 0; i < items.length; i++) {
+        var r = items[i];
+        var tr = document.createElement('tr');
+
+        // Time
+        var tdTime = document.createElement('td');
+        tdTime.className = 'text-eh-text2 whitespace-nowrap';
+        tdTime.textContent = r.time || '-';
+        tr.appendChild(tdTime);
+
+        // Company
+        var tdCompany = document.createElement('td');
+        tdCompany.className = 'text-eh-text max-w-[180px] truncate';
+        tdCompany.textContent = r.company || '-';
+        tdCompany.title = r.company || '';
+        tr.appendChild(tdCompany);
+
+        // Email
+        var tdEmail = document.createElement('td');
+        tdEmail.className = 'text-eh-blue max-w-[200px] truncate';
+        tdEmail.textContent = r.email || '-';
+        tdEmail.title = r.email || '';
+        tr.appendChild(tdEmail);
+
+        // Status
+        var tdStatus = document.createElement('td');
+        tdStatus.appendChild(createStatusBadge(r.status));
+        tr.appendChild(tdStatus);
+
+        // Source
+        var tdSource = document.createElement('td');
+        tdSource.appendChild(createSourceBadge(r.source));
+        tr.appendChild(tdSource);
+
+        tbody.appendChild(tr);
+      }
+    }
+
+    function updateErrorTable(errors) {
+      var tbody = document.getElementById('errorBody');
+      if (!tbody) return;
+
+      tbody.textContent = '';
+
+      if (!errors || !errors.length) {
+        var emptyRow = document.createElement('tr');
+        var emptyTd = document.createElement('td');
+        emptyTd.setAttribute('colspan', '3');
+        emptyTd.className = 'text-center text-eh-text2 py-8';
+        emptyTd.textContent = 'ไม่มี error';
+        emptyRow.appendChild(emptyTd);
+        tbody.appendChild(emptyRow);
+        return;
+      }
+
+      var items = errors.slice(0, 10);
+      for (var i = 0; i < items.length; i++) {
+        var e = items[i];
+        var tr = document.createElement('tr');
+
+        var tdTime = document.createElement('td');
+        tdTime.className = 'text-eh-text2 whitespace-nowrap';
+        tdTime.textContent = e.time || '-';
+        tr.appendChild(tdTime);
+
+        var tdCompany = document.createElement('td');
+        tdCompany.className = 'text-eh-text max-w-[150px] truncate';
+        tdCompany.textContent = e.company || '-';
+        tdCompany.title = e.company || '';
+        tr.appendChild(tdCompany);
+
+        var tdError = document.createElement('td');
+        tdError.className = 'text-eh-red max-w-[250px] truncate';
+        tdError.textContent = e.error || '-';
+        tdError.title = e.error || '';
+        tr.appendChild(tdError);
+
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ============================================================
+    // File Upload
+    // ============================================================
+    (function initUpload() {
+      var zone = document.getElementById('uploadZone');
+      var fileInput = document.getElementById('fileInput');
+      if (!zone || !fileInput) return;
+
+      // Click to select
+      zone.addEventListener('click', function() {
+        fileInput.click();
+      });
+
+      // File selected
+      fileInput.addEventListener('change', function() {
+        if (fileInput.files && fileInput.files.length > 0) {
+          handleFileSelect(fileInput.files[0]);
+        }
+      });
+
+      // Drag and drop
+      zone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        zone.classList.add('dragover');
+      });
+      zone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+      });
+      zone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          var file = e.dataTransfer.files[0];
+          if (file.name.match(/\.(xlsx|xls)$/i)) {
+            handleFileSelect(file);
+          } else {
+            alert('กรุณาเลือกไฟล์ .xlsx หรือ .xls เท่านั้น');
+          }
+        }
+      });
+    })();
+
+    function handleFileSelect(file) {
+      selectedFile = file;
+      var fileInfoEl = document.getElementById('fileInfo');
+      var fileNameEl = document.getElementById('fileName');
+      if (fileInfoEl && fileNameEl) {
+        fileNameEl.textContent = file.name;
+        fileInfoEl.classList.remove('hidden');
+      }
+      // Hide previous results
+      var resultEl = document.getElementById('uploadResult');
+      if (resultEl) resultEl.classList.add('hidden');
+    }
+
+    function doUpload() {
+      if (!selectedFile) return;
+
+      var progressEl = document.getElementById('uploadProgress');
+      var progressFillEl = document.getElementById('uploadProgressFill');
+      var statusTextEl = document.getElementById('uploadStatusText');
+      var resultEl = document.getElementById('uploadResult');
+      var resultTextEl = document.getElementById('uploadResultText');
+      var uploadBtn = document.getElementById('uploadBtn');
+
+      if (progressEl) progressEl.classList.remove('hidden');
+      if (resultEl) resultEl.classList.add('hidden');
+      if (uploadBtn) uploadBtn.disabled = true;
+      if (progressFillEl) progressFillEl.style.width = '0%';
+      if (statusTextEl) statusTextEl.textContent = 'Uploading...';
+
+      var formData = new FormData();
+      formData.append('file', selectedFile);
+
+      // Simulate progress with XHR for progress events
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/import', true);
+
+      xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round((e.loaded / e.total) * 100);
+          if (progressFillEl) progressFillEl.style.width = pct + '%';
+          if (statusTextEl) statusTextEl.textContent = 'Uploading... ' + pct + '%';
+        }
+      });
+
+      xhr.addEventListener('load', function() {
+        if (progressEl) progressEl.classList.add('hidden');
+        if (uploadBtn) uploadBtn.disabled = false;
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            var result = JSON.parse(xhr.responseText);
+            var msg = 'Imported: ' + formatNumber(result.imported || 0) +
+                      ' | Duplicates: ' + formatNumber(result.duplicates || 0) +
+                      ' | Errors: ' + formatNumber(result.errors || 0);
+            if (resultTextEl) resultTextEl.textContent = msg;
+            if (resultEl) {
+              resultEl.classList.remove('hidden');
+              resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-green/10 border border-eh-green/30 text-xs';
+            }
+            // Refresh dashboard
+            fetchStats();
+          } catch(e) {
+            if (resultTextEl) resultTextEl.textContent = 'Upload สำเร็จ';
+            if (resultEl) resultEl.classList.remove('hidden');
+          }
+        } else {
+          if (resultTextEl) resultTextEl.textContent = 'Upload ล้มเหลว: HTTP ' + xhr.status;
+          if (resultEl) {
+            resultEl.classList.remove('hidden');
+            resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-red/10 border border-eh-red/30 text-xs';
+            if (resultTextEl) resultTextEl.style.color = '#ff3366';
+          }
+        }
+      });
+
+      xhr.addEventListener('error', function() {
+        if (progressEl) progressEl.classList.add('hidden');
+        if (uploadBtn) uploadBtn.disabled = false;
+        if (resultTextEl) {
+          resultTextEl.textContent = 'Upload ล้มเหลว: Network error';
+          resultTextEl.style.color = '#ff3366';
+        }
+        if (resultEl) {
+          resultEl.classList.remove('hidden');
+          resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-red/10 border border-eh-red/30 text-xs';
+        }
+      });
+
+      xhr.send(formData);
+    }
+
+    // ============================================================
+    // Fetch Data
+    // ============================================================
+    async function fetchStats() {
+      try {
+        var res = await fetch('/api/stats?' + Date.now());
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+        updateDashboard(data);
+      } catch(e) {
+        console.warn('Fetch stats failed:', e.message);
+        showOfflineStatus();
+      }
+    }
+
+    // ============================================================
+    // Health Check
+    // ============================================================
+    async function checkHealth() {
+      try {
+        var res = await fetch('/api/health?' + Date.now());
+        if (!res.ok) showOfflineStatus();
+      } catch(e) {
+        // Health check failed silently
+      }
+    }
+
+    // ============================================================
+    // Init
+    // ============================================================
+    fetchStats();
+    setInterval(fetchStats, 15000);
+    setInterval(checkHealth, 60000);
+  </script>
+</body>
+</html>

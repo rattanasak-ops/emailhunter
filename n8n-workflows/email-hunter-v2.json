@@ -1,0 +1,531 @@
+{
+  "name": "EmailHunter v2 — Smart Anti-Block",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 1,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://emailhunter-api:3456/api/companies/next",
+        "options": {
+          "timeout": 10000,
+          "neverError": true
+        }
+      },
+      "id": "node-get-next-company",
+      "name": "Get Next Company",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-should-stop",
+              "leftValue": "={{ $json.session.should_stop }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-should-stop",
+      "name": "Check Should Stop",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://emailhunter-api:3456/api/report/send",
+        "options": {
+          "timeout": 10000,
+          "neverError": true
+        }
+      },
+      "id": "node-send-report",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 100],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-should-pause",
+              "leftValue": "={{ $json.search.shouldPause }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-should-pause",
+      "name": "Check Should Pause",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 400],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "minutes"
+      },
+      "id": "node-long-pause",
+      "name": "Long Pause",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 500],
+      "onError": "continueRegularOutput",
+      "webhookId": "long-pause-webhook"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://emailhunter-searxng:8080/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $('Get Next Company').first().json.search.query }}"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "engines",
+              "value": "={{ $('Get Next Company').first().json.search.engines }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "neverError": true
+        }
+      },
+      "id": "node-searxng-search",
+      "name": "SearXNG Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Search Results\nconst company = $('Get Next Company').first().json.company;\nconst searchData = $input.first().json;\n\nconst EMAIL_REGEX = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\n\nconst JUNK_PREFIXES = [\n  'noreply@', 'no-reply@', 'example@', 'test@',\n  'user@', 'webmaster@', 'postmaster@', 'abuse@',\n  'spam@', 'mailer-daemon@'\n];\n\nconst JUNK_DOMAINS = [\n  '@sentry.', '@wixpress.', '@placeholder.', '@example.', '@test.'\n];\n\nconst JUNK_EXTENSIONS = ['.png', '.jpg', '.gif', '.svg', '.webp', '.css', '.js'];\n\nfunction isJunkEmail(email) {\n  const lower = email.toLowerCase();\n  if (JUNK_PREFIXES.some(p => lower.startsWith(p))) return true;\n  if (JUNK_DOMAINS.some(d => lower.includes(d))) return true;\n  if (JUNK_EXTENSIONS.some(ext => lower.endsWith(ext))) return true;\n  return false;\n}\n\nfunction getPriority(email) {\n  const lower = email.toLowerCase();\n  if (lower.startsWith('info@')) return 1;\n  if (lower.startsWith('contact@')) return 2;\n  if (lower.startsWith('sales@')) return 3;\n  if (lower.startsWith('admin@')) return 4;\n  if (lower.startsWith('support@')) return 5;\n  return 6;\n}\n\n// Collect all text from search results\nlet allText = '';\nlet sourceUrl = '';\nconst topUrls = [];\n\nconst results = searchData.results || [];\nfor (const r of results) {\n  allText += ' ' + (r.title || '') + ' ' + (r.content || '') + ' ' + (r.url || '');\n  if (topUrls.length < 5 && r.url) {\n    topUrls.push(r.url);\n  }\n}\n\n// Extract emails\nconst rawEmails = allText.match(EMAIL_REGEX) || [];\nconst cleanEmails = [...new Set(rawEmails)]\n  .filter(e => !isJunkEmail(e))\n  .sort((a, b) => getPriority(a) - getPriority(b));\n\nconst bestEmail = cleanEmails.length > 0 ? cleanEmails[0] : null;\n\n// Find source URL for best email\nif (bestEmail) {\n  for (const r of results) {\n    const text = (r.title || '') + ' ' + (r.content || '') + ' ' + (r.url || '');\n    if (text.includes(bestEmail)) {\n      sourceUrl = r.url || '';\n      break;\n    }\n  }\n}\n\nreturn [{\n  json: {\n    company_id: company?.id || '',\n    company_name: company?.name || '',\n    email: bestEmail,\n    all_emails: cleanEmails,\n    source_url: sourceUrl,\n    found_in_search: cleanEmails.length > 0,\n    top_urls: topUrls,\n    status: cleanEmails.length > 0 ? 'found' : 'pending'\n  }\n}];"
+      },
+      "id": "node-parse-search-results",
+      "name": "Parse Search Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-found-email",
+              "leftValue": "={{ $json.found_in_search }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-found-email",
+      "name": "IF Found Email",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format Result - Search path\nconst input = $input.first().json;\n\nreturn [{\n  json: {\n    company_id: input.company_id,\n    company_name: input.company_name,\n    email: input.email,\n    all_emails: input.all_emails,\n    source_url: input.source_url,\n    source: 'search',\n    status: 'found',\n    processed_date: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-format-result-search",
+      "name": "Format Result (Search)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.top_urls[0] }}",
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 3
+            }
+          },
+          "neverError": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "node-fetch-website",
+      "name": "Fetch Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 420],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Emails from Page\nconst company = $('Get Next Company').first().json.company;\nconst parseData = $('Parse Search Results').first().json;\nconst pageContent = $input.first().json.data || $input.first().json.body || '';\n\nconst EMAIL_REGEX = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\n\nconst JUNK_PREFIXES = [\n  'noreply@', 'no-reply@', 'example@', 'test@',\n  'user@', 'webmaster@', 'postmaster@', 'abuse@',\n  'spam@', 'mailer-daemon@'\n];\n\nconst JUNK_DOMAINS = [\n  '@sentry.', '@wixpress.', '@placeholder.', '@example.', '@test.'\n];\n\nconst JUNK_EXTENSIONS = ['.png', '.jpg', '.gif', '.svg', '.webp', '.css', '.js'];\n\nfunction isJunkEmail(email) {\n  const lower = email.toLowerCase();\n  if (JUNK_PREFIXES.some(p => lower.startsWith(p))) return true;\n  if (JUNK_DOMAINS.some(d => lower.includes(d))) return true;\n  if (JUNK_EXTENSIONS.some(ext => lower.endsWith(ext))) return true;\n  return false;\n}\n\nfunction getPriority(email) {\n  const lower = email.toLowerCase();\n  if (lower.startsWith('info@')) return 1;\n  if (lower.startsWith('contact@')) return 2;\n  if (lower.startsWith('sales@')) return 3;\n  if (lower.startsWith('admin@')) return 4;\n  if (lower.startsWith('support@')) return 5;\n  return 6;\n}\n\nconst rawEmails = (typeof pageContent === 'string' ? pageContent : '').match(EMAIL_REGEX) || [];\nconst cleanEmails = [...new Set(rawEmails)]\n  .filter(e => !isJunkEmail(e))\n  .sort((a, b) => getPriority(a) - getPriority(b));\n\nconst bestEmail = cleanEmails.length > 0 ? cleanEmails[0] : null;\n\nreturn [{\n  json: {\n    company_id: parseData.company_id || company?.id || '',\n    company_name: parseData.company_name || company?.name || '',\n    email: bestEmail,\n    all_emails: cleanEmails,\n    source_url: parseData.top_urls?.[0] || '',\n    source: 'website',\n    status: bestEmail ? 'found' : 'not_found',\n    processed_date: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-extract-emails-page",
+      "name": "Extract Emails from Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 420],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge Results - normalize output from both paths\nconst input = $input.first().json;\n\nreturn [{\n  json: {\n    company_id: input.company_id || '',\n    company_name: input.company_name || '',\n    email: input.email || null,\n    all_emails: input.all_emails || [],\n    source_url: input.source_url || '',\n    source: input.source || 'unknown',\n    status: input.status || 'not_found',\n    processed_date: input.processed_date || new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://emailhunter-api:3456/api/companies/{{ $json.company_id }}/result",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $json.email }}"
+            },
+            {
+              "name": "all_emails",
+              "value": "={{ $json.all_emails }}"
+            },
+            {
+              "name": "source_url",
+              "value": "={{ $json.source_url }}"
+            },
+            {
+              "name": "status",
+              "value": "={{ $json.status }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.source }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "neverError": true
+        }
+      },
+      "id": "node-save-result",
+      "name": "Save Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate Delay\nconst delay = $('Get Next Company').first().json.search?.delay || 12;\nconst waitSeconds = Math.max(6, Math.min(25, Math.round(delay)));\n\nreturn [{ json: { waitSeconds } }];"
+      },
+      "id": "node-calculate-delay",
+      "name": "Calculate Delay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.waitSeconds }}",
+        "unit": "seconds"
+      },
+      "id": "node-smart-delay",
+      "name": "Smart Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2640, 300],
+      "onError": "continueRegularOutput",
+      "webhookId": "smart-delay-webhook"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Next Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Next Company": {
+      "main": [
+        [
+          {
+            "node": "Check Should Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Should Stop": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Should Pause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Should Pause": {
+      "main": [
+        [
+          {
+            "node": "Long Pause",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SearXNG Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Long Pause": {
+      "main": [
+        [
+          {
+            "node": "Get Next Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SearXNG Search": {
+      "main": [
+        [
+          {
+            "node": "Parse Search Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Search Results": {
+      "main": [
+        [
+          {
+            "node": "IF Found Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Found Email": {
+      "main": [
+        [
+          {
+            "node": "Format Result (Search)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Result (Search)": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website": {
+      "main": [
+        [
+          {
+            "node": "Extract Emails from Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Emails from Page": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Save Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Result": {
+      "main": [
+        [
+          {
+            "node": "Calculate Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Delay": {
+      "main": [
+        [
+          {
+            "node": "Smart Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smart Delay": {
+      "main": [
+        [
+          {
+            "node": "Get Next Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Bangkok",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [
+    {
+      "name": "EmailHunter"
+    }
+  ],
+  "pinData": {},
+  "versionId": "v2",
+  "meta": {
+    "instanceId": "emailhunter-v2"
+  }
+}

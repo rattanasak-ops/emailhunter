@@ -1,0 +1,14 @@
+{
+  "last_updated": "",
+  "total_companies": 0,
+  "processed": 0,
+  "found": 0,
+  "not_found": 0,
+  "errors": 0,
+  "pending": 0,
+  "success_rate": 0,
+  "today": { "date": "", "processed": 0, "found": 0 },
+  "daily_history": [],
+  "recent": [],
+  "error_log": []
+}

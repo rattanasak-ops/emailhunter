@@ -1,0 +1,40 @@
+use_default_settings: true
+
+general:
+  instance_name: "EmailHunter Search"
+
+search:
+  safe_search: 0
+  default_lang: "th"
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "${SEARXNG_SECRET}"
+  limiter: false
+  method: GET
+  bind_address: "0.0.0.0"
+  port: 8080
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+redis:
+  url: "redis://emailhunter-redis:6379/0"
+
+outgoing:
+  request_timeout: 10
