@@ -535,9 +535,26 @@ app.post('/api/import', upload.single('file'), (req, res) => {
 
     // Auto-detect columns
     const headers = Object.keys(rows[0]);
-    const companyCol = headers.find(h => /company|บริษัท|ชื่อ|name/i.test(h));
+    let companyCol = headers.find(h => /company|บริษัท|ชื่อ|name/i.test(h));
     const taxIdCol = headers.find(h => /tax_id|เลขที่|tax|เลขประจำตัว/i.test(h));
     const industryCol = headers.find(h => /industry|ประเภท|อุตสาหกรรม/i.test(h));
+
+    // Fallback: if single column and no header detected, treat as headerless file
+    // Re-read with header option to include first row as data
+    if (!companyCol && headers.length === 1) {
+      log('No header detected, single column — treating as headerless company list');
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      rows.length = 0;
+      for (const r of rawRows) {
+        const val = String(r[0] || '').trim();
+        if (val) rows.push({ company_name: val });
+      }
+      companyCol = 'company_name';
+    } else if (!companyCol && headers.length > 1) {
+      // Multiple columns but no match — use first column as company name
+      log(`No header match found, using first column "${headers[0]}" as company name`);
+      companyCol = headers[0];
+    }
 
     if (!companyCol) {
       return res.status(400).json({
