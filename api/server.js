@@ -344,15 +344,53 @@ app.get('/api/companies/next', (req, res) => {
   }
 });
 
+// ─── Email Quality Filter ────────────────────────────────────
+// Blacklisted domains: directory sites, job boards, data aggregators
+const BLACKLIST_DOMAINS = [
+  'connectbizs.com', 'jobthai.com', 'creden.co', 'longdo.com',
+  'yellowpages.co.th', 'trustonline.co.th', 'thaidbs.com',
+  'thaibizdir.com', 'registered.in.th', 'dataforthai.com',
+  'smeregister.com', 'infoquest.co.th', 'checkraka.com',
+  'jobsdb.com', 'jobbkk.com', 'indeed.com', 'linkedin.com',
+  'facebook.com', 'google.com', 'wikipedia.org',
+  'thaijobsgov.com', 'nationejobs.com', 'jobth.com',
+  'pantip.com', 'sanook.com', 'kapook.com',
+];
+
+function isBlacklistedEmail(email) {
+  if (!email) return true;
+  const domain = email.toLowerCase().split('@')[1] || '';
+  return BLACKLIST_DOMAINS.some(bl => domain === bl || domain.endsWith('.' + bl));
+}
+
+function filterValidEmails(emails, companyName) {
+  if (!emails) return { best: null, all: [] };
+  const list = Array.isArray(emails) ? emails : [emails];
+  const clean = list.filter(e => e && !isBlacklistedEmail(e));
+  if (clean.length === 0) return { best: null, all: [] };
+  return { best: clean[0], all: clean };
+}
+
 // Save result for a company
 app.post('/api/companies/:id/result', (req, res) => {
   try {
     const { id } = req.params;
-    const { email, all_emails, source_url, status, source, error_message } = req.body;
+    let { email, all_emails, source_url, status, source, error_message } = req.body;
 
     const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
+    }
+
+    // Filter out blacklisted emails
+    const filtered = filterValidEmails(all_emails || (email ? [email] : []), company.company_name);
+    email = filtered.best;
+    all_emails = filtered.all;
+
+    // If email was "found" but all emails were blacklisted, mark as not_found
+    if (status === 'found' && !email) {
+      status = 'not_found';
+      log(`Filtered out blacklisted email for "${company.company_name}"`);
     }
 
     const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(' ', 'T');
