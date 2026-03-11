@@ -364,6 +364,9 @@ app.post('/api/companies/:id/result', (req, res) => {
       finalStatus = 'retry';
     }
 
+    // Serialize all_emails if it's an array
+    const allEmailsStr = Array.isArray(all_emails) ? all_emails.join(', ') : (all_emails || null);
+
     // Update company
     db.prepare(`
       UPDATE companies SET
@@ -378,7 +381,7 @@ app.post('/api/companies/:id/result', (req, res) => {
       WHERE id = ?
     `).run(
       email || null,
-      all_emails || null,
+      allEmailsStr,
       source_url || null,
       finalStatus,
       error_message || null,
