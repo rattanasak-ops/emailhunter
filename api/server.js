@@ -263,7 +263,8 @@ app.get('/api/companies/next', (req, res) => {
   try {
     const processedToday = getProcessedToday();
     const withinSchedule = isWithinSchedule();
-    const shouldStop = !withinSchedule || processedToday >= DAILY_LIMIT;
+    const forceRun = req.query.force === 'true';
+    const shouldStop = (!withinSchedule && !forceRun) || processedToday >= DAILY_LIMIT;
 
     // Find next pending (or retry) company
     const company = db.prepare(
