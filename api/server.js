@@ -653,13 +653,13 @@ app.get('/api/stats', (req, res) => {
       'SELECT date, processed, found, not_found, errors, blocks_detected FROM daily_stats ORDER BY date DESC LIMIT 30'
     ).all();
 
-    // Recent results (last 50 from today)
+    // Recent results (all from today)
     const recent = db.prepare(`
       SELECT company_name as company, email, status,
              substr(updated_at, 12, 8) as time
       FROM companies
       WHERE processed_date LIKE ? AND status IN ('done','found','not_found')
-      ORDER BY updated_at DESC LIMIT 50
+      ORDER BY updated_at DESC
     `).all(`${today}%`);
 
     // Error log (last 50 errors from today)
