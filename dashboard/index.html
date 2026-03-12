@@ -532,6 +532,7 @@
         <table>
           <thead>
             <tr>
+              <th>#</th>
               <th>เวลา</th>
               <th>บริษัท</th>
               <th>Email</th>
@@ -540,7 +541,7 @@
             </tr>
           </thead>
           <tbody id="activityBody">
-            <tr><td colspan="5" class="text-center text-eh-text2 py-8">รอข้อมูล...</td></tr>
+            <tr><td colspan="6" class="text-center text-eh-text2 py-8">รอข้อมูล...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1157,7 +1158,7 @@
       if (!recent || !recent.length) {
         var emptyRow = document.createElement('tr');
         var emptyTd = document.createElement('td');
-        emptyTd.setAttribute('colspan', '5');
+        emptyTd.setAttribute('colspan', '6');
         emptyTd.className = 'text-center text-eh-text2 py-8';
         emptyTd.textContent = 'รอข้อมูล...';
         emptyRow.appendChild(emptyTd);
@@ -1169,6 +1170,12 @@
       for (var i = 0; i < items.length; i++) {
         var r = items[i];
         var tr = document.createElement('tr');
+
+        // Row number
+        var tdNum = document.createElement('td');
+        tdNum.className = 'text-eh-text2 text-center';
+        tdNum.textContent = i + 1;
+        tr.appendChild(tdNum);
 
         // Time
         var tdTime = document.createElement('td');
