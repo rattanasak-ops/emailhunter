@@ -345,30 +345,167 @@ app.get('/api/companies/next', (req, res) => {
 });
 
 // ─── Email Quality Filter ────────────────────────────────────
-// Blacklisted domains: directory sites, job boards, data aggregators
+// Blacklisted domains: directory sites, job boards, data aggregators, unrelated companies
 const BLACKLIST_DOMAINS = [
-  'connectbizs.com', 'jobthai.com', 'creden.co', 'longdo.com',
-  'yellowpages.co.th', 'trustonline.co.th', 'thaidbs.com',
-  'thaibizdir.com', 'registered.in.th', 'dataforthai.com',
-  'smeregister.com', 'infoquest.co.th', 'checkraka.com',
-  'jobsdb.com', 'jobbkk.com', 'indeed.com', 'linkedin.com',
-  'facebook.com', 'google.com', 'wikipedia.org',
+  // Directory & data sites
+  'connectbizs.com', 'longdo.com', 'yellowpages.co.th', 'trustonline.co.th',
+  'thaidbs.com', 'thaibizdir.com', 'registered.in.th', 'dataforthai.com',
+  'smeregister.com', 'infoquest.co.th', 'checkraka.com', 'creden.co',
+  // Job boards
+  'jobthai.com', 'jobsdb.com', 'jobbkk.com', 'indeed.com', 'linkedin.com',
   'thaijobsgov.com', 'nationejobs.com', 'jobth.com',
+  // Social & general
+  'facebook.com', 'google.com', 'wikipedia.org',
   'pantip.com', 'sanook.com', 'kapook.com',
+  'sentry.io', 'wixpress.com', 'placeholder.com', 'example.com',
+  // Banks
+  'kasikornbank.com', 'kbank.com', 'scb.co.th', 'bangkokbank.com',
+  'ktb.co.th', 'krungsri.com', 'tmb.co.th', 'ttbbank.com',
+  'gsb.or.th', 'baac.or.th', 'ghbank.co.th', 'tisco.co.th',
+  'lhbank.co.th', 'cimbthai.com', 'uob.co.th', 'thanachartbank.co.th',
+  // Big retail / corporate
+  'siammakro.co.th', 'makro.co.th', 'cpall.co.th', '7eleven.co.th',
+  'bigc.co.th', 'lotuss.com', 'central.co.th', 'homepro.co.th',
+  'doikham.co.th', 'teleinfomedia.co.th',
+  // Unrelated companies found in test
+  'tencent.co.th', 'roblox.com', 'sermsukplc.com', 'thespinoff.co.nz',
+  'kex-express.com', 'autohome.com.cn', 'btnet.com.tw', 'aui.ma',
+  'record-a.autohome.com.cn', 'ponpe.com', 'smjip.com',
+  'atta.or.th', 'warin.co.th', 'menatransport.co.th',
+  'btacia.co.th', 'uaeconsultant.com', 'zainoifb.com',
+  'ideal1world.com', '168studioandsupply.com', 'ie.co.th',
+  'asianet.co.th', 'sgb.co.th',
+  // Chinese / foreign junk domains
+  'zhihu.com', 'pizzaexpress.cn',
+  // Thai platforms / unrelated from round 4
+  'renthub.in.th', 'hrcenter.co.th', 'sritranggroup.com',
+  'amjakastudio.co.th', 'hinothailand.com', 'optasiacapital.com',
+  'smooth-e.com', 'reddoorsamsen.com', 'accellence.co.th',
+  'mission-t.co.th', 'vichai.group', 'degree.plus',
+  'baanpattayagroup.com', 'idinarchitects.com',
+  'worldpump-wpm.com', 'jwtech.co.th', 'xplus.co.th',
+  // Big Thai corporates from round 5
+  'centralpattana.co.th', 'scg.com', 'scgchemicals.com',
+  'ttwplc.com', 'oic.or.th', 'sam.or.th', 'thnic.co.th',
+  'lmwn.com', 'systems.co.th',
+  // Foreign unrelated from round 5
+  'ahlsell.se', 'startuptalky.com', 'dezpax.com',
+  'pronalityacademy.com', 'thaiinternships.com',
+  'lifestyletech.co.th', 'jorakay.co.th', 'prompt1992.com',
+  'gfreight.co.th', 'qbic.co.th', 'yellbkk.com',
 ];
+
+// Generic email providers — these are OK for Thai SMEs
+const GENERIC_PROVIDERS = [
+  'gmail.com', 'hotmail.com', 'yahoo.com', 'outlook.com', 'live.com',
+  'hotmail.co.th', 'yahoo.co.th', 'icloud.com', 'me.com',
+  'protonmail.com', 'mail.com', 'gmx.com',
+];
+
+// Track emails already assigned to companies (duplicate detection)
+const emailAssignmentCount = {};
+
+const ALLOWED_SHORT_LOCAL = ['info','sales','contact','sale','hr','admin','acc','fax'];
 
 function isBlacklistedEmail(email) {
   if (!email) return true;
-  const domain = email.toLowerCase().split('@')[1] || '';
+  const lower = email.toLowerCase();
+  const [localPart, domain] = lower.split('@');
+  if (!domain) return true;
+
+  // Block ALL government emails (*.go.th)
+  if (domain.endsWith('.go.th')) return true;
+
+  // Block Chinese domains (*.cn)
+  if (domain.endsWith('.cn')) return true;
+
+  // Block other foreign TLDs unlikely for Thai SMEs
+  const foreignTLDs = ['.se','.de','.fr','.ru','.kr','.jp','.tw','.br','.mx','.nz','.ma'];
+  if (foreignTLDs.some(tld => domain.endsWith(tld))) return true;
+
+  // Block university/academic emails
+  if (domain.endsWith('.ac.th') || domain.endsWith('.edu')) return true;
+
+  // Block short/junk local parts (but keep info@, sales@, contact@ etc.)
+  if (localPart.length < 3 && !ALLOWED_SHORT_LOCAL.includes(localPart)) return true;
+
+  // Block obvious junk patterns
+  if (/^x{3,}$/.test(localPart)) return true;  // xxxx@
+  if (/^\d{1,3}$/.test(localPart)) return true; // 25@, 1@
+
   return BLACKLIST_DOMAINS.some(bl => domain === bl || domain.endsWith('.' + bl));
 }
 
+function isGenericProvider(email) {
+  const domain = email.toLowerCase().split('@')[1] || '';
+  return GENERIC_PROVIDERS.includes(domain);
+}
+
+// Score email quality: higher = better
+function scoreEmail(email, companyName) {
+  if (!email) return -1;
+  const lower = email.toLowerCase();
+  const domain = lower.split('@')[1] || '';
+  const domainBase = domain.split('.')[0]; // e.g. 'tupack' from 'tupack.co.th'
+
+  // Already assigned to another company → likely directory email
+  const assignCount = emailAssignmentCount[lower] || 0;
+  if (assignCount >= 1) return -10; // duplicate = reject
+
+  // Blacklisted → reject
+  if (isBlacklistedEmail(email)) return -10;
+
+  // Generic provider (gmail, hotmail) → acceptable for SMEs
+  if (isGenericProvider(email)) return 50;
+
+  // Company-specific domain: check if related to company name
+  // Normalize company name: remove common Thai suffixes
+  const cleanName = companyName
+    .replace(/บริษัท|จำกัด|มหาชน|\(ประเทศไทย\)|ห้างหุ้นส่วน|สามัญ/g, '')
+    .replace(/[\s().,\-]/g, '')
+    .toLowerCase();
+
+  // Check if domain base appears in company name or vice versa
+  if (cleanName.includes(domainBase) || domainBase.includes(cleanName.slice(0, 4))) {
+    return 100; // strong match
+  }
+
+  // Check English transliteration hints (partial match)
+  // If domain has 3+ chars that appear in sequence in company name
+  const domainChars = domainBase.replace(/[^a-z]/g, '');
+  if (domainChars.length >= 3) {
+    // Domain is a real company domain but doesn't match our target company
+    // This is suspicious — could be from search results of wrong company
+    return 30; // low confidence
+  }
+
+  return 40; // unknown domain, medium confidence
+}
+
 function filterValidEmails(emails, companyName) {
-  if (!emails) return { best: null, all: [] };
+  if (!emails) return { best: null, all: [], confidence: 'none' };
   const list = Array.isArray(emails) ? emails : [emails];
-  const clean = list.filter(e => e && !isBlacklistedEmail(e));
-  if (clean.length === 0) return { best: null, all: [] };
-  return { best: clean[0], all: clean };
+
+  // Score and sort
+  const scored = list
+    .filter(e => e && typeof e === 'string')
+    .map(e => ({ email: e, score: scoreEmail(e, companyName) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return { best: null, all: [], confidence: 'none' };
+
+  const best = scored[0].email;
+  const confidence = scored[0].score >= 100 ? 'high' : scored[0].score >= 50 ? 'medium' : 'low';
+
+  // Track assignment
+  emailAssignmentCount[best.toLowerCase()] = (emailAssignmentCount[best.toLowerCase()] || 0) + 1;
+
+  return {
+    best: best,
+    all: scored.map(x => x.email),
+    confidence: confidence,
+  };
 }
 
 // Save result for a company
@@ -382,15 +519,18 @@ app.post('/api/companies/:id/result', (req, res) => {
       return res.status(404).json({ error: 'Company not found' });
     }
 
-    // Filter out blacklisted emails
+    // Filter out blacklisted/duplicate/irrelevant emails
     const filtered = filterValidEmails(all_emails || (email ? [email] : []), company.company_name);
     email = filtered.best;
     all_emails = filtered.all;
+    const confidence = filtered.confidence;
 
-    // If email was "found" but all emails were blacklisted, mark as not_found
+    // If email was "found" but all emails were filtered out, mark as not_found
     if (status === 'found' && !email) {
       status = 'not_found';
-      log(`Filtered out blacklisted email for "${company.company_name}"`);
+      log(`Filtered out bad email for "${company.company_name}" (blacklisted/duplicate/irrelevant)`);
+    } else if (email && confidence === 'low') {
+      log(`Low confidence email for "${company.company_name}": ${email}`);
     }
 
     const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(' ', 'T');
@@ -430,14 +570,21 @@ app.post('/api/companies/:id/result', (req, res) => {
       id
     );
 
-    // Update daily_stats
-    if (status === 'done' || status === 'found') {
-      db.prepare('UPDATE daily_stats SET processed = processed + 1, found = found + 1 WHERE date = ?').run(today);
-      sessionFound++;
-    } else if (status === 'not_found') {
+    // Update daily_stats — use finalStatus (after retry logic) and check actual email
+    const hasEmail = !!(email && email.trim());
+    if (finalStatus === 'done' || finalStatus === 'found') {
+      if (hasEmail) {
+        db.prepare('UPDATE daily_stats SET processed = processed + 1, found = found + 1 WHERE date = ?').run(today);
+        sessionFound++;
+      } else {
+        db.prepare('UPDATE daily_stats SET processed = processed + 1, not_found = not_found + 1 WHERE date = ?').run(today);
+      }
+    } else if (finalStatus === 'not_found') {
       db.prepare('UPDATE daily_stats SET processed = processed + 1, not_found = not_found + 1 WHERE date = ?').run(today);
-    } else if (status === 'error') {
+    } else if (finalStatus === 'error') {
       db.prepare('UPDATE daily_stats SET processed = processed + 1, errors = errors + 1 WHERE date = ?').run(today);
+    } else if (finalStatus === 'retry') {
+      // retry = will be reprocessed, don't count as processed yet
     } else {
       db.prepare('UPDATE daily_stats SET processed = processed + 1 WHERE date = ?').run(today);
     }
@@ -445,11 +592,13 @@ app.post('/api/companies/:id/result', (req, res) => {
     // Track in error buffer for anti-blocking
     trackResult(status === 'error');
 
-    // Track speed
+    // Track speed and session count (exclude retry — will be reprocessed)
     recentSpeeds.push(Date.now());
     if (recentSpeeds.length > 10) recentSpeeds.shift();
 
-    sessionProcessed++;
+    if (finalStatus !== 'retry') {
+      sessionProcessed++;
+    }
 
     const stats = getDailyStats(today);
     res.json({
@@ -474,11 +623,12 @@ app.get('/api/stats', (req, res) => {
 
     // Overall counts
     const total = db.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
-    const processed = db.prepare("SELECT COUNT(*) as cnt FROM companies WHERE status IN ('done','found')").get().cnt;
     const found = db.prepare("SELECT COUNT(*) as cnt FROM companies WHERE status IN ('done','found') AND email IS NOT NULL AND email != ''").get().cnt;
     const notFound = db.prepare("SELECT COUNT(*) as cnt FROM companies WHERE status = 'not_found'").get().cnt;
     const errors = db.prepare("SELECT COUNT(*) as cnt FROM companies WHERE status = 'error'").get().cnt;
     const pending = db.prepare("SELECT COUNT(*) as cnt FROM companies WHERE status IN ('pending','retry')").get().cnt;
+    // PROCESSED = all companies that finished processing (found + not_found + errors)
+    const processed = found + notFound + errors;
 
     const successRate = processed > 0 ? Math.round((found / processed) * 1000) / 10 : 0;
 
@@ -494,8 +644,7 @@ app.get('/api/stats', (req, res) => {
 
     let avgSpeed = 0;
     if (sessionStartTime && sessionProcessed > 0) {
-      // Rough avg: processed / minutes since session start
-      const sessionMinutes = process.uptime() / 60;
+      const sessionMinutes = (Date.now() - new Date(sessionStartTime).getTime()) / 1000 / 60;
       avgSpeed = sessionMinutes > 0 ? Math.round((sessionProcessed / sessionMinutes) * 10) / 10 : 0;
     }
 
@@ -522,6 +671,37 @@ app.get('/api/stats', (req, res) => {
       ORDER BY updated_at DESC LIMIT 50
     `).all(`${today}%`);
 
+    // Determine system status
+    let systemStatus = 'idle';
+    if (sessionStartTime) {
+      const lastActivity = recentSpeeds.length > 0 ? recentSpeeds[recentSpeeds.length - 1] : 0;
+      const sinceLastActivity = lastActivity > 0 ? (Date.now() - lastActivity) / 1000 : Infinity;
+      if (sinceLastActivity < 120) {
+        systemStatus = 'running';
+      } else if (sinceLastActivity < 600) {
+        systemStatus = 'paused';
+      }
+    }
+
+    // Speed trend (compare first half vs second half of recentSpeeds)
+    let speedTrend = 'stable';
+    if (recentSpeeds.length >= 6) {
+      const mid = Math.floor(recentSpeeds.length / 2);
+      const firstHalf = (recentSpeeds[mid] - recentSpeeds[0]) / mid;
+      const secondHalf = (recentSpeeds[recentSpeeds.length - 1] - recentSpeeds[mid]) / (recentSpeeds.length - mid);
+      if (secondHalf < firstHalf * 0.8) speedTrend = 'increasing'; // faster = less time between
+      else if (secondHalf > firstHalf * 1.2) speedTrend = 'decreasing'; // slower = more time between
+    }
+
+    // Anti-block info
+    const errorRate = errorBuffer.length >= 5 ? errorBuffer.filter(Boolean).length / errorBuffer.length : 0;
+    let abStatus = 'normal';
+    if (errorRate > 0.5) abStatus = 'paused';
+    else if (errorRate > 0.3) abStatus = 'throttled';
+
+    // Last updated from most recent activity
+    const lastUpdatedTs = recentSpeeds.length > 0 ? new Date(recentSpeeds[recentSpeeds.length - 1]).toISOString() : null;
+
     res.json({
       total_companies: total,
       processed,
@@ -530,6 +710,18 @@ app.get('/api/stats', (req, res) => {
       errors,
       pending,
       success_rate: successRate,
+      // Root-level fields for dashboard
+      current_speed: currentSpeed,
+      avg_speed: avgSpeed,
+      speed_trend: speedTrend,
+      status: systemStatus,
+      last_updated: lastUpdatedTs,
+      anti_block: {
+        status: abStatus,
+        blocks_today: sessionBlocksDetected,
+        queries_until_break: nextBreakAt - queriesSinceBreak,
+        error_rate: Math.round(errorRate * 100),
+      },
       session: {
         active: sessionStartTime !== null,
         start_time: sessionStartTime || '',
@@ -551,6 +743,33 @@ app.get('/api/stats', (req, res) => {
     });
   } catch (err) {
     log(`ERROR /api/stats: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reset all data for fresh start
+app.post('/api/reset', (req, res) => {
+  try {
+    db.prepare('DELETE FROM companies').run();
+    db.prepare('DELETE FROM daily_stats').run();
+    db.prepare('DELETE FROM session_log').run();
+
+    // Reset in-memory session tracking
+    sessionStartTime = null;
+    sessionProcessed = 0;
+    sessionFound = 0;
+    sessionBlocksDetected = 0;
+    recentSpeeds.length = 0;
+    errorBuffer.length = 0;
+    lastEngines.length = 0;
+    queriesSinceBreak = 0;
+    nextBreakAt = randomBetween(30, 60);
+    Object.keys(emailAssignmentCount).forEach(k => delete emailAssignmentCount[k]);
+
+    log('ALL DATA RESET — companies, daily_stats, session_log cleared');
+    res.json({ success: true, message: 'All data has been reset' });
+  } catch (err) {
+    log(`ERROR /api/reset: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
