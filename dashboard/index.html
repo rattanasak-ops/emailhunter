@@ -671,26 +671,30 @@
           <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
         </div>
         <!-- Selected file info -->
-        <div id="fileInfo" class="hidden mt-3 flex items-center justify-between">
+        <div id="fileInfo" class="hidden mt-3 flex items-center justify-between bg-eh-bg2/50 rounded-lg px-3 py-2">
           <div class="flex items-center gap-2 text-xs">
             <svg class="w-4 h-4 text-eh-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
             <span id="fileName" class="text-eh-text font-medium truncate max-w-[200px]"></span>
+            <span id="fileSize" class="text-eh-text2"></span>
           </div>
-          <button id="uploadBtn" onclick="doUpload()" class="px-4 py-1.5 bg-eh-green/20 text-eh-green border border-eh-green/30 rounded-lg text-xs font-medium hover:bg-eh-green/30 transition-colors">
-            Upload
-          </button>
+          <div class="flex items-center gap-2">
+            <button onclick="resetUpload()" class="px-3 py-1.5 text-eh-text2 hover:text-eh-red text-xs transition-colors" title="ยกเลิก">
+              ยกเลิก
+            </button>
+            <button id="uploadBtn" onclick="doUpload()" class="px-5 py-1.5 bg-eh-green text-eh-bg font-bold rounded-lg text-xs hover:bg-eh-green/80 transition-colors">
+              Upload
+            </button>
+          </div>
         </div>
         <!-- Upload progress -->
-        <div id="uploadProgress" class="hidden">
-          <div class="upload-progress-bar">
+        <div id="uploadProgress" class="hidden mt-3">
+          <div class="upload-progress-bar" style="height:6px">
             <div id="uploadProgressFill" class="upload-progress-fill" style="width: 0%"></div>
           </div>
           <p id="uploadStatusText" class="text-xs text-eh-text2 mt-2 text-center">Uploading...</p>
         </div>
         <!-- Upload result -->
-        <div id="uploadResult" class="hidden mt-3 px-3 py-2 rounded-lg bg-eh-green/10 border border-eh-green/30 text-xs">
-          <span id="uploadResultText" class="text-eh-green"></span>
-        </div>
+        <div id="uploadResult" class="hidden mt-3 rounded-lg text-sm"></div>
       </div>
 
       <!-- Export Results -->
@@ -1742,13 +1746,33 @@
       selectedFile = file;
       var fileInfoEl = document.getElementById('fileInfo');
       var fileNameEl = document.getElementById('fileName');
+      var fileSizeEl = document.getElementById('fileSize');
       if (fileInfoEl && fileNameEl) {
         fileNameEl.textContent = file.name;
+        if (fileSizeEl) {
+          var sizeMB = (file.size / 1024 / 1024).toFixed(1);
+          fileSizeEl.textContent = sizeMB > 1 ? '(' + sizeMB + ' MB)' : '(' + Math.round(file.size / 1024) + ' KB)';
+        }
         fileInfoEl.classList.remove('hidden');
       }
+      // ซ่อน dropzone เมื่อเลือกไฟล์แล้ว
+      var zone = document.getElementById('uploadZone');
+      if (zone) zone.classList.add('hidden');
       // Hide previous results
       var resultEl = document.getElementById('uploadResult');
       if (resultEl) resultEl.classList.add('hidden');
+    }
+
+    function resetUpload() {
+      selectedFile = null;
+      var fileInput = document.getElementById('fileInput');
+      if (fileInput) fileInput.value = '';
+      var fileInfo = document.getElementById('fileInfo');
+      if (fileInfo) fileInfo.classList.add('hidden');
+      var resultEl = document.getElementById('uploadResult');
+      if (resultEl) resultEl.classList.add('hidden');
+      var zone = document.getElementById('uploadZone');
+      if (zone) zone.classList.remove('hidden');
     }
 
     function doUpload() {
@@ -1758,19 +1782,18 @@
       var progressFillEl = document.getElementById('uploadProgressFill');
       var statusTextEl = document.getElementById('uploadStatusText');
       var resultEl = document.getElementById('uploadResult');
-      var resultTextEl = document.getElementById('uploadResultText');
       var uploadBtn = document.getElementById('uploadBtn');
+      var fileInfoEl = document.getElementById('fileInfo');
 
       if (progressEl) progressEl.classList.remove('hidden');
       if (resultEl) resultEl.classList.add('hidden');
-      if (uploadBtn) uploadBtn.disabled = true;
+      if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = 'กำลังส่ง...'; }
       if (progressFillEl) progressFillEl.style.width = '0%';
-      if (statusTextEl) statusTextEl.textContent = 'Uploading...';
+      if (statusTextEl) statusTextEl.textContent = 'กำลังส่งไฟล์...';
 
       var formData = new FormData();
       formData.append('file', selectedFile);
 
-      // Simulate progress with XHR for progress events
       var xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/import', true);
 
@@ -1778,55 +1801,108 @@
         if (e.lengthComputable) {
           var pct = Math.round((e.loaded / e.total) * 100);
           if (progressFillEl) progressFillEl.style.width = pct + '%';
-          if (statusTextEl) statusTextEl.textContent = 'Uploading... ' + pct + '%';
+          if (pct >= 100) {
+            if (statusTextEl) statusTextEl.textContent = 'กำลังประมวลผลข้อมูล... รอสักครู่';
+          } else {
+            if (statusTextEl) statusTextEl.textContent = 'กำลังส่งไฟล์... ' + pct + '%';
+          }
         }
       });
 
       xhr.addEventListener('load', function() {
         if (progressEl) progressEl.classList.add('hidden');
-        if (uploadBtn) uploadBtn.disabled = false;
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = 'Upload'; }
 
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
-            var result = JSON.parse(xhr.responseText);
-            var msg = 'Imported: ' + formatNumber(result.imported || 0) +
-                      ' | Duplicates: ' + formatNumber(result.duplicates || 0) +
-                      ' | Errors: ' + formatNumber(result.errors || 0);
-            if (resultTextEl) resultTextEl.textContent = msg;
-            if (resultEl) {
-              resultEl.classList.remove('hidden');
-              resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-green/10 border border-eh-green/30 text-xs';
+            var r = JSON.parse(xhr.responseText);
+            var imported = r.imported || 0;
+            var duplicates = r.duplicates || 0;
+            var errors = r.errors || 0;
+            var total = imported + duplicates + errors;
+            var html = '';
+
+            if (imported > 0 && errors === 0) {
+              // สำเร็จ — มีข้อมูลใหม่
+              html = '<div class="px-4 py-3 bg-eh-green/10 border border-eh-green/30 rounded-lg">'
+                + '<div class="flex items-center gap-2 mb-2">'
+                + '<svg class="w-5 h-5 text-eh-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+                + '<span class="text-eh-green font-bold">Upload สำเร็จ!</span></div>'
+                + '<div class="text-eh-text text-xs space-y-1 ml-7">'
+                + '<p>เพิ่มบริษัทใหม่ <strong class="text-eh-green">' + formatNumber(imported) + '</strong> รายการ</p>'
+                + (duplicates > 0 ? '<p class="text-eh-text2">ข้ามบริษัทที่มีอยู่แล้ว ' + formatNumber(duplicates) + ' รายการ</p>' : '')
+                + '</div>'
+                + '<div class="mt-2 ml-7"><button onclick="resetUpload()" class="text-xs text-eh-text2 hover:text-eh-green underline">Upload ไฟล์อื่น</button></div>'
+                + '</div>';
+            } else if (imported === 0 && duplicates > 0 && errors === 0) {
+              // ไม่มีข้อมูลใหม่ — ซ้ำหมด
+              html = '<div class="px-4 py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">'
+                + '<div class="flex items-center gap-2 mb-2">'
+                + '<svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+                + '<span class="text-yellow-400 font-bold">ไม่มีข้อมูลใหม่</span></div>'
+                + '<div class="text-eh-text text-xs space-y-1 ml-7">'
+                + '<p>บริษัททั้ง ' + formatNumber(duplicates) + ' รายการ มีอยู่ในระบบแล้ว</p>'
+                + '<p class="text-eh-text2">กรุณาใช้ไฟล์ที่มีบริษัทใหม่</p>'
+                + '</div>'
+                + '<div class="mt-2 ml-7"><button onclick="resetUpload()" class="text-xs text-eh-text2 hover:text-yellow-400 underline">Upload ไฟล์อื่น</button></div>'
+                + '</div>';
+            } else if (errors > 0) {
+              // มี error
+              html = '<div class="px-4 py-3 bg-eh-red/10 border border-eh-red/30 rounded-lg">'
+                + '<div class="flex items-center gap-2 mb-2">'
+                + '<svg class="w-5 h-5 text-eh-red" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+                + '<span class="text-eh-red font-bold">Upload มีปัญหาบางส่วน</span></div>'
+                + '<div class="text-eh-text text-xs space-y-1 ml-7">'
+                + (imported > 0 ? '<p>เพิ่มบริษัทใหม่ <strong class="text-eh-green">' + formatNumber(imported) + '</strong> รายการ</p>' : '')
+                + (duplicates > 0 ? '<p>ข้ามบริษัทที่มีอยู่แล้ว ' + formatNumber(duplicates) + ' รายการ</p>' : '')
+                + '<p class="text-eh-red">ข้อมูลผิดพลาด ' + formatNumber(errors) + ' รายการ (ชื่อบริษัทว่าง)</p>'
+                + '</div>'
+                + '<div class="mt-2 ml-7"><button onclick="resetUpload()" class="text-xs text-eh-text2 hover:text-eh-red underline">Upload ไฟล์อื่น</button></div>'
+                + '</div>';
+            } else {
+              // imported=0, duplicates=0, errors=0 — ไฟล์ว่าง
+              html = '<div class="px-4 py-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">'
+                + '<div class="flex items-center gap-2 mb-2">'
+                + '<svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+                + '<span class="text-yellow-400 font-bold">ไม่พบข้อมูลในไฟล์</span></div>'
+                + '<div class="text-eh-text text-xs ml-7"><p>ไฟล์อาจว่างหรือไม่มีคอลัมน์ชื่อบริษัท</p></div>'
+                + '<div class="mt-2 ml-7"><button onclick="resetUpload()" class="text-xs text-eh-text2 hover:text-yellow-400 underline">Upload ไฟล์อื่น</button></div>'
+                + '</div>';
             }
-            // Refresh dashboard
+
+            if (resultEl) { resultEl.innerHTML = html; resultEl.classList.remove('hidden'); }
+            if (fileInfoEl) fileInfoEl.classList.add('hidden');
             fetchStats();
           } catch(e) {
-            if (resultTextEl) resultTextEl.textContent = 'Upload สำเร็จ';
-            if (resultEl) resultEl.classList.remove('hidden');
+            showUploadError('ไม่สามารถอ่านผลลัพธ์จาก server ได้');
           }
         } else {
-          if (resultTextEl) resultTextEl.textContent = 'Upload ล้มเหลว: HTTP ' + xhr.status;
-          if (resultEl) {
-            resultEl.classList.remove('hidden');
-            resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-red/10 border border-eh-red/30 text-xs';
-            if (resultTextEl) resultTextEl.style.color = '#ff3366';
-          }
+          var errMsg = 'Upload ล้มเหลว';
+          try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch(e) {}
+          showUploadError(errMsg);
         }
       });
 
       xhr.addEventListener('error', function() {
         if (progressEl) progressEl.classList.add('hidden');
-        if (uploadBtn) uploadBtn.disabled = false;
-        if (resultTextEl) {
-          resultTextEl.textContent = 'Upload ล้มเหลว: Network error';
-          resultTextEl.style.color = '#ff3366';
-        }
-        if (resultEl) {
-          resultEl.classList.remove('hidden');
-          resultEl.className = 'mt-3 px-3 py-2 rounded-lg bg-eh-red/10 border border-eh-red/30 text-xs';
-        }
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = 'Upload'; }
+        showUploadError('ไม่สามารถเชื่อมต่อ server ได้ กรุณาลองใหม่');
       });
 
       xhr.send(formData);
+    }
+
+    function showUploadError(msg) {
+      var resultEl = document.getElementById('uploadResult');
+      if (resultEl) {
+        resultEl.innerHTML = '<div class="px-4 py-3 bg-eh-red/10 border border-eh-red/30 rounded-lg">'
+          + '<div class="flex items-center gap-2 mb-1">'
+          + '<svg class="w-5 h-5 text-eh-red" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+          + '<span class="text-eh-red font-bold text-sm">' + msg + '</span></div>'
+          + '<div class="mt-2 ml-7"><button onclick="resetUpload()" class="text-xs text-eh-text2 hover:text-eh-red underline">ลองใหม่</button></div>'
+          + '</div>';
+        resultEl.classList.remove('hidden');
+      }
     }
 
     // ============================================================
