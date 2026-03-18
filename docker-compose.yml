@@ -49,6 +49,9 @@ services:
     container_name: emailhunter-api
     environment:
       - LINE_NOTIFY_TOKEN=${LINE_NOTIFY_TOKEN}
+      - LARK_APP_ID=${LARK_APP_ID}
+      - LARK_APP_SECRET=${LARK_APP_SECRET}
+      - LARK_CHAT_ID=${LARK_CHAT_ID}
       - TZ=Asia/Bangkok
     volumes:
       - api-data:/data

@@ -234,6 +234,10 @@ function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function formatNumber(n) {
+  return Number(n || 0).toLocaleString();
+}
+
 function checkSessionBreak() {
   queriesSinceBreak++;
   if (queriesSinceBreak >= nextBreakAt) {
@@ -276,15 +280,114 @@ function checkErrorSpike() {
   return { shouldPause: false, pauseDuration: 0 };
 }
 
-// 6. Daily Limits
-const DAILY_LIMIT = 4500;
+// 6. Daily Limits — สุ่มใหม่ทุกวัน
+let DAILY_LIMIT = randomBetween(4000, 4800);
+let dailyLimitDate = todayStr();
+
+function getDailyLimit() {
+  const today = todayStr();
+  if (today !== dailyLimitDate) {
+    DAILY_LIMIT = randomBetween(4000, 4800);
+    dailyLimitDate = today;
+    log(`New daily limit: ${DAILY_LIMIT} (randomized)`);
+  }
+  return DAILY_LIMIT;
+}
+
+// 7. Adaptive Delay — ปรับ delay ตาม error rate อัตโนมัติ
+let adaptiveDelayMean = 12;
+
+function getAdaptiveDelay() {
+  const errRate = errorBuffer.length >= 5 ? errorBuffer.filter(Boolean).length / errorBuffer.length : 0;
+  if (errRate > 0.5) adaptiveDelayMean = 25;
+  else if (errRate > 0.35) adaptiveDelayMean = 20;
+  else if (errRate > 0.2) adaptiveDelayMean = 15;
+  else adaptiveDelayMean = 12;
+  return gaussianDelay(adaptiveDelayMean, 4, 6, 35);
+}
+
+// ─── Work Cycle System — ทำงานเหมือนคนจริง ──────────────────
+// Work Phase: ทำงาน 45-65 นาที → Rest Phase: พัก 15-30 นาที → วนซ้ำ
+const workCycle = {
+  phase: 'idle',         // 'working' | 'resting' | 'idle' | 'long_rest'
+  cycleCount: 0,         // รอบที่เท่าไหร่
+  phaseStart: null,      // timestamp เริ่มต้น phase ปัจจุบัน
+  workDuration: 0,       // ms — ระยะทำงาน phase นี้
+  restDuration: 0,       // ms — ระยะพัก phase นี้
+  queriesThisPhase: 0,   // queries ใน phase นี้
+  totalQueriesToday: 0,   // queries ทั้งวัน
+  todayDate: todayStr(),  // track วันที่เพื่อ reset
+};
+
+function resetWorkCycleDaily() {
+  const today = todayStr();
+  if (today !== workCycle.todayDate) {
+    workCycle.totalQueriesToday = 0;
+    workCycle.cycleCount = 0;
+    workCycle.todayDate = today;
+  }
+}
+
+function startWorkPhase() {
+  resetWorkCycleDaily();
+  workCycle.phase = 'working';
+  workCycle.cycleCount++;
+  workCycle.phaseStart = Date.now();
+  workCycle.workDuration = randomBetween(45, 65) * 60 * 1000; // 45-65 นาที
+  workCycle.queriesThisPhase = 0;
+  log(`Work Phase ${workCycle.cycleCount} started — duration ${Math.round(workCycle.workDuration / 60000)} min`);
+}
+
+function startRestPhase() {
+  workCycle.phase = 'resting';
+  workCycle.phaseStart = Date.now();
+  workCycle.restDuration = randomBetween(15, 30) * 60 * 1000; // 15-30 นาที
+  log(`Rest Phase started — duration ${Math.round(workCycle.restDuration / 60000)} min`);
+}
+
+function startLongRest() {
+  workCycle.phase = 'long_rest';
+  workCycle.phaseStart = Date.now();
+  workCycle.restDuration = randomBetween(120, 240) * 60 * 1000; // 2-4 ชั่วโมง
+  log(`Long Rest (daily limit reached) — duration ${Math.round(workCycle.restDuration / 60000)} min`);
+}
+
+function checkWorkCycle() {
+  if (workCycle.phase !== 'working') return { shouldRest: false };
+
+  const elapsed = Date.now() - workCycle.phaseStart;
+  const remaining = workCycle.workDuration - elapsed;
+
+  if (remaining <= 0) {
+    return { shouldRest: true };
+  }
+  return { shouldRest: false, remainingMs: remaining };
+}
+
+function isRestComplete() {
+  if (workCycle.phase !== 'resting' && workCycle.phase !== 'long_rest') return true;
+  const elapsed = Date.now() - workCycle.phaseStart;
+  return elapsed >= workCycle.restDuration;
+}
+
+function getRestRemaining() {
+  if (workCycle.phase !== 'resting' && workCycle.phase !== 'long_rest') return 0;
+  const elapsed = Date.now() - workCycle.phaseStart;
+  return Math.max(0, workCycle.restDuration - elapsed);
+}
+
+// Slow start — กลับมาจากพัก delay x1.5 ใน 5 queries แรก
+function getSlowStartMultiplier() {
+  if (workCycle.queriesThisPhase < 5) return 1.5;
+  return 1.0;
+}
 
 // ─── Session tracking ────────────────────────────────────────
 let sessionStartTime = null;
 let sessionProcessed = 0;
 let sessionFound = 0;
 let sessionBlocksDetected = 0;
-const recentSpeeds = []; // timestamps of last 10 results for speed calc
+const recentSpeeds = []; // timestamps of last 20 results for speed calc
 
 // ─── Manual Override Control ─────────────────────────────────
 let manualMode = null; // null = auto (schedule), 'running' = force run, 'stopped' = force stop
@@ -347,10 +450,10 @@ app.get('/api/health', (req, res) => {
 app.get('/api/companies/next', (req, res) => {
   try {
     const processedToday = getProcessedToday();
-    const withinSchedule = isWithinSchedule();
+    const dailyLimit = getDailyLimit();
     const forceRun = req.query.force === 'true' || manualMode === 'running';
     const forceStop = manualMode === 'stopped';
-    const shouldStop = forceStop || ((!withinSchedule && !forceRun) || processedToday >= DAILY_LIMIT);
+    const shouldStop = forceStop || (!forceRun || processedToday >= dailyLimit);
 
     // Find next pending (or retry) company
     const company = db.prepare(
@@ -399,7 +502,7 @@ app.get('/api/companies/next', (req, res) => {
         company: null,
         session: {
           should_stop: true,
-          reason: processedToday >= DAILY_LIMIT ? 'daily_limit' : 'outside_schedule',
+          reason: processedToday >= dailyLimit ? 'daily_limit' : 'not_running',
           processed_today: processedToday,
         },
       });
@@ -417,7 +520,7 @@ app.get('/api/companies/next', (req, res) => {
     // Anti-blocking: build search config
     const query = buildQuery(company.company_name);
     const engines = pickEngine();
-    const delay = gaussianDelay();
+    const delay = getAdaptiveDelay() * getSlowStartMultiplier();
     const breakCheck = checkSessionBreak();
     const errorCheck = checkErrorSpike();
 
@@ -872,7 +975,7 @@ async function processOneCompany() {
   }
 }
 
-// Worker loop
+// Worker loop — with Work Cycle system
 async function workerLoop() {
   if (!workerRunning || manualMode !== 'running') {
     workerRunning = false;
@@ -880,28 +983,118 @@ async function workerLoop() {
     return;
   }
 
+  // เช็ค daily limit (สุ่ม)
+  const dailyLimit = getDailyLimit();
+  const processedToday = getProcessedToday();
+  if (processedToday >= dailyLimit) {
+    log(`Daily limit reached (${processedToday}/${dailyLimit}) — entering long rest`);
+    startLongRest();
+
+    // Lark: แจ้งครบ limit
+    const stats = getDailyStats(todayStr());
+    notifyLark('Daily Limit Reached', [
+      `**ครบ ${formatNumber(processedToday)} / ${formatNumber(dailyLimit)} วันนี้**`,
+      `Emails: ${formatNumber(stats.found || 0)} | Not Found: ${formatNumber(stats.not_found || 0)}`,
+      `Cycle: รอบที่ ${workCycle.cycleCount}`,
+      `พักยาว ${Math.round(workCycle.restDuration / 60000)} นาที แล้วเริ่มวันใหม่`,
+    ].join('\n'), 'blue');
+
+    // Log session
+    if (sessionStartTime && sessionProcessed > 0) {
+      db.prepare(`INSERT INTO session_log (start_time, end_time, processed, found, not_found, errors, blocks_detected) VALUES (?,?,?,?,?,?,?)`)
+        .run(sessionStartTime, nowTimeStr(), sessionProcessed, sessionFound, sessionProcessed - sessionFound, 0, sessionBlocksDetected);
+      sessionStartTime = null; sessionProcessed = 0; sessionFound = 0; sessionBlocksDetected = 0;
+    }
+
+    // รอพักยาวแล้ว restart
+    workerTimer = setTimeout(() => {
+      log('Long rest complete — resuming');
+      startWorkPhase();
+      notifyLark('กลับมาทำงาน (วันใหม่)', `**Work Phase ${workCycle.cycleCount}** — ${Math.round(workCycle.workDuration / 60000)} นาที`, 'green');
+      workerLoop();
+    }, workCycle.restDuration);
+    return;
+  }
+
+  // เช็ค Work Cycle — ถึงเวลาพักหรือยัง
+  if (workCycle.phase === 'idle') {
+    startWorkPhase();
+    notifyLark('เริ่มทำงาน', [
+      `**Work Phase ${workCycle.cycleCount}** — ${Math.round(workCycle.workDuration / 60000)} นาที`,
+      `Daily Limit: ${formatNumber(dailyLimit)} | Pending: ${formatNumber(db.prepare("SELECT COUNT(*) as c FROM companies WHERE status IN ('pending','retry')").get().c)}`,
+    ].join('\n'), 'green');
+  }
+
+  const cycleCheck = checkWorkCycle();
+  if (cycleCheck.shouldRest) {
+    // จบ Work Phase → เข้า Rest Phase
+    startRestPhase();
+
+    const stats = getDailyStats(todayStr());
+    notifyLark(`พักรอบที่ ${workCycle.cycleCount}`, [
+      `**ทำไป ${formatNumber(workCycle.queriesThisPhase)} ราย** รอบนี้`,
+      `วันนี้: ${formatNumber(processedToday)} / ${formatNumber(dailyLimit)}`,
+      `Emails: ${formatNumber(stats.found || 0)} (${stats.processed > 0 ? ((stats.found / stats.processed) * 100).toFixed(1) : 0}%)`,
+      `พัก ${Math.round(workCycle.restDuration / 60000)} นาที`,
+    ].join('\n'), 'yellow');
+
+    workerTimer = setTimeout(() => {
+      if (!workerRunning || manualMode !== 'running') { workerRunning = false; return; }
+      startWorkPhase();
+      notifyLark(`กลับมาทำงาน — รอบ ${workCycle.cycleCount}`, [
+        `**Work Phase ${workCycle.cycleCount}** — ${Math.round(workCycle.workDuration / 60000)} นาที`,
+        `เหลือวันนี้: ${formatNumber(dailyLimit - processedToday)}`,
+      ].join('\n'), 'green');
+      workerLoop();
+    }, workCycle.restDuration);
+    return;
+  }
+
+  // ทำงานจริง
   const hasMore = await processOneCompany();
+  workCycle.queriesThisPhase++;
+  workCycle.totalQueriesToday++;
 
   if (!hasMore) {
     workerRunning = false;
     manualMode = null;
+    workCycle.phase = 'idle';
     log('Worker finished — no more pending');
+    notifyLark('งานเสร็จ — ไม่มี Pending', [
+      `**ประมวลผลครบ!**`,
+      `วันนี้: ${formatNumber(processedToday)} | Emails: ${formatNumber(sessionFound)}`,
+      `กรุณา upload บริษัทชุดใหม่`,
+    ].join('\n'), 'blue');
     return;
   }
 
-  // Anti-block delay (8-20 seconds)
-  const delay = gaussianDelay();
+  // Adaptive delay + slow start + coffee break + error spike
+  let delay = getAdaptiveDelay();
+  delay *= getSlowStartMultiplier();
   const breakCheck = checkSessionBreak();
+  const errorCheck = checkErrorSpike();
 
-  if (breakCheck.shouldPause) {
-    log(`Worker: coffee break ${breakCheck.pauseDuration}s`);
-    workerTimer = setTimeout(workerLoop, breakCheck.pauseDuration * 1000);
+  if (errorCheck.shouldPause) {
+    sessionBlocksDetected++;
+    ensureDailyStats(todayStr());
+    db.prepare('UPDATE daily_stats SET blocks_detected = blocks_detected + 1 WHERE date = ?').run(todayStr());
+    const errRate = errorBuffer.length >= 5 ? Math.round(errorBuffer.filter(Boolean).length / errorBuffer.length * 100) : 0;
+    notifyLark('Error Rate สูง', [
+      `**Error rate: ${errRate}%** — หยุดพัก ${Math.round(errorCheck.pauseDuration / 60)} นาที`,
+      `Adaptive delay: ${adaptiveDelayMean}s (ปรับขึ้นอัตโนมัติ)`,
+    ].join('\n'), 'red');
+  }
+
+  if (breakCheck.shouldPause || errorCheck.shouldPause) {
+    const pauseMs = Math.max(breakCheck.pauseDuration, errorCheck.pauseDuration) * 1000;
+    log(`Worker: pause ${Math.round(pauseMs / 1000)}s (coffee=${breakCheck.shouldPause}, error=${errorCheck.shouldPause})`);
+    workerTimer = setTimeout(workerLoop, pauseMs);
   } else {
     workerTimer = setTimeout(workerLoop, delay * 1000);
   }
 }
 
-// Start manual session
+// Start session — เริ่มทำงานทันที
 app.post('/api/session/start', (req, res) => {
   manualMode = 'running';
   manualModeSetAt = new Date().toISOString();
@@ -912,8 +1105,9 @@ app.post('/api/session/start', (req, res) => {
 
   if (!workerRunning) {
     workerRunning = true;
-    log(`MANUAL START — worker started by user`);
-    workerLoop(); // Start processing immediately
+    workCycle.phase = 'idle'; // จะเริ่ม work phase ใน workerLoop
+    log(`START — worker started`);
+    workerLoop();
   }
 
   res.json({ success: true, mode: 'running', message: 'Processing started.' });
@@ -924,19 +1118,27 @@ app.post('/api/session/stop', (req, res) => {
   manualMode = 'stopped';
   manualModeSetAt = new Date().toISOString();
   workerRunning = false;
+  workCycle.phase = 'idle';
   if (workerTimer) { clearTimeout(workerTimer); workerTimer = null; }
-  log(`MANUAL STOP — worker stopped by user (processed: ${sessionProcessed}, found: ${sessionFound})`);
+
+  notifyLark('หยุดทำงาน (Manual Stop)', [
+    `Processed: ${formatNumber(sessionProcessed)} | Found: ${formatNumber(sessionFound)}`,
+    `Cycle: รอบที่ ${workCycle.cycleCount}`,
+  ].join('\n'), 'yellow');
+
+  log(`STOP — worker stopped (processed: ${sessionProcessed}, found: ${sessionFound})`);
   res.json({ success: true, mode: 'stopped', message: `Stopped. This run: ${sessionProcessed} processed, ${sessionFound} found.` });
 });
 
-// Resume auto mode (back to schedule)
+// Resume — กลับมาทำงานต่อ
 app.post('/api/session/auto', (req, res) => {
   manualMode = null;
   manualModeSetAt = null;
   workerRunning = false;
+  workCycle.phase = 'idle';
   if (workerTimer) { clearTimeout(workerTimer); workerTimer = null; }
-  log(`AUTO MODE — returned to schedule (01:00-09:00)`);
-  res.json({ success: true, mode: 'auto', message: 'Back to automatic schedule.' });
+  log(`AUTO MODE — idle`);
+  res.json({ success: true, mode: 'auto', message: 'System idle. Press Start to begin.' });
 });
 
 // Get current session mode
@@ -945,11 +1147,17 @@ app.get('/api/session/status', (req, res) => {
     mode: manualMode || 'auto',
     set_at: manualModeSetAt,
     worker_running: workerRunning,
-    within_schedule: isWithinSchedule(),
     session_active: sessionStartTime !== null,
     session_start: sessionStartTime,
     processed_today: getProcessedToday(),
-    daily_limit: DAILY_LIMIT,
+    daily_limit: getDailyLimit(),
+    work_cycle: {
+      phase: workCycle.phase,
+      cycle_count: workCycle.cycleCount,
+      queries_this_phase: workCycle.queriesThisPhase,
+      rest_remaining_ms: getRestRemaining(),
+      phase_start: workCycle.phaseStart ? new Date(workCycle.phaseStart).toISOString() : null,
+    },
   });
 });
 
@@ -1080,11 +1288,21 @@ app.get('/api/stats', (req, res) => {
         errors: todayStats.errors || 0,
         blocks_detected: todayStats.blocks_detected || 0,
       },
+      work_cycle: {
+        phase: workCycle.phase,
+        cycle_count: workCycle.cycleCount,
+        queries_this_phase: workCycle.queriesThisPhase,
+        work_duration_min: Math.round((workCycle.workDuration || 0) / 60000),
+        rest_duration_min: Math.round((workCycle.restDuration || 0) / 60000),
+        phase_elapsed_min: workCycle.phaseStart ? Math.round((Date.now() - workCycle.phaseStart) / 60000) : 0,
+        rest_remaining_min: Math.round(getRestRemaining() / 60000),
+        adaptive_delay: adaptiveDelayMean,
+      },
+      daily_limit: getDailyLimit(),
       daily_history: dailyHistory,
       recent,
       error_log: errorLog,
       manual_mode: manualMode || 'auto',
-      within_schedule: isWithinSchedule(),
     });
   } catch (err) {
     log(`ERROR /api/stats: ${err.message}`);
@@ -1329,7 +1547,7 @@ function generateReport() {
 
   const report = `\n📊 EmailHunter — รายงานประจำวัน
 📅 วันที่: ${today}
-⏰ Session: ${sessionStartTime || '01:00'} - 09:00
+⏰ Work Cycles: ${workCycle.cycleCount} รอบ
 ─────────────────
 ✅ ประมวลผล: ${fmt(processedToday)}
 📧 เจอ email: ${fmt(foundToday)} (${foundPct}%)
@@ -1345,6 +1563,112 @@ Top 5 emails วันนี้:
 ${topEmailsList}`;
 
   return report;
+}
+
+// ─── Lark API Notification ──────────────────────────────────
+let larkTokenCache = { token: null, expiresAt: 0 };
+
+function getLarkToken() {
+  return new Promise((resolve, reject) => {
+    const appId = process.env.LARK_APP_ID;
+    const appSecret = process.env.LARK_APP_SECRET;
+    if (!appId || !appSecret) return reject(new Error('LARK_APP_ID/SECRET not set'));
+
+    // ใช้ cache ถ้ายังไม่หมดอายุ
+    if (larkTokenCache.token && Date.now() < larkTokenCache.expiresAt) {
+      return resolve(larkTokenCache.token);
+    }
+
+    const postData = JSON.stringify({ app_id: appId, app_secret: appSecret });
+    const options = {
+      hostname: 'open.larksuite.com',
+      path: '/open-apis/auth/v3/tenant_access_token/internal',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.tenant_access_token) {
+            larkTokenCache = { token: json.tenant_access_token, expiresAt: Date.now() + (json.expire - 300) * 1000 };
+            resolve(json.tenant_access_token);
+          } else {
+            reject(new Error(`Lark token error: ${data}`));
+          }
+        } catch(e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
+
+function sendLarkCard(title, contentMd, color = 'green') {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const token = await getLarkToken();
+      const chatId = process.env.LARK_CHAT_ID;
+      if (!chatId) return reject(new Error('LARK_CHAT_ID not set'));
+
+      const colorMap = { green: 'green', red: 'red', yellow: 'yellow', blue: 'blue' };
+      const card = {
+        config: { wide_screen_mode: true },
+        header: {
+          title: { tag: 'plain_text', content: title },
+          template: colorMap[color] || 'blue',
+        },
+        elements: [
+          { tag: 'markdown', content: contentMd },
+          { tag: 'note', elements: [{ tag: 'plain_text', content: `EmailHunter | ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}` }] },
+        ],
+      };
+
+      const postData = JSON.stringify({
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content: JSON.stringify(card),
+      });
+
+      const options = {
+        hostname: 'open.larksuite.com',
+        path: '/open-apis/im/v1/messages?receive_id_type=chat_id',
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData),
+        },
+      };
+
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve({ success: true });
+          } else {
+            log(`Lark API error ${res.statusCode}: ${data}`);
+            reject(new Error(`Lark ${res.statusCode}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.write(postData);
+      req.end();
+    } catch(e) { reject(e); }
+  });
+}
+
+// Helper: ส่ง Lark แบบ fire-and-forget (ไม่ block flow หลัก)
+function notifyLark(title, contentMd, color = 'green') {
+  sendLarkCard(title, contentMd, color).catch(err => {
+    log(`Lark notify failed: ${err.message}`);
+  });
 }
 
 function sendLineNotify(message) {
@@ -1457,10 +1781,11 @@ app.use((err, req, res, next) => {
 
 // ─── Start server ────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
-  log(`EmailHunter API v2.0.0 running on port ${PORT}`);
+  log(`EmailHunter API v3.0.0 running on port ${PORT}`);
   log(`Database: /data/emailhunter.db`);
-  log(`Schedule: 01:00-09:00 (Asia/Bangkok)`);
-  log(`Daily limit: ${DAILY_LIMIT} queries`);
+  log(`Mode: Work Cycle (45-65 min work / 15-30 min rest)`);
+  log(`Daily limit: ${getDailyLimit()} queries (randomized 4000-4800)`);
+  log(`Lark: ${process.env.LARK_APP_ID ? 'configured' : 'not configured'}`);
 });
 
 // ─── CSV Restore (import results back from exported CSV) ─────

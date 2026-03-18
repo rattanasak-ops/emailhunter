@@ -348,14 +348,16 @@
         <h1 class="text-2xl md:text-3xl font-bold tracking-tight">
           <span class="text-eh-green">Email</span><span class="text-eh-text">Hunter</span>
         </h1>
-        <p class="text-eh-text2 text-xs mt-1">v2.0 &mdash; Smart Anti-Block Engine</p>
+        <p class="text-eh-text2 text-xs mt-1">v3.0 &mdash; Human-like Work Cycle Engine</p>
       </div>
       <div class="flex items-center gap-3 flex-wrap">
-        <!-- Schedule Indicator -->
+        <!-- Work Cycle Indicator -->
         <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-eh-card border border-eh-border text-xs">
-          <svg class="w-3.5 h-3.5 text-eh-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          <span class="text-eh-text2">Session:</span>
-          <span class="text-eh-blue font-medium">01:00-09:00</span>
+          <svg class="w-3.5 h-3.5 text-eh-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span id="workCyclePhase" class="text-eh-blue font-medium">Idle</span>
+          <span class="text-eh-text2">|</span>
+          <span class="text-eh-text2">Cycle:</span>
+          <span id="workCycleCount" class="text-eh-text font-medium">0</span>
           <span class="text-eh-text2">|</span>
           <span id="currentTime" class="text-eh-text font-medium">--:--</span>
         </div>
@@ -1034,6 +1036,30 @@
 
       document.getElementById('queriesUntilBreak').textContent = ab.queries_until_break != null ? ab.queries_until_break : '-';
       document.getElementById('blocksToday').textContent = blocks;
+
+      // --- Work Cycle Status ---
+      var wc = data.work_cycle || {};
+      var wcPhaseEl = document.getElementById('workCyclePhase');
+      var wcCountEl = document.getElementById('workCycleCount');
+      if (wcPhaseEl) {
+        var phaseLabels = { working: 'Working', resting: 'Resting', long_rest: 'Long Rest', idle: 'Idle' };
+        var phaseText = phaseLabels[wc.phase] || 'Idle';
+        if (wc.phase === 'resting' && wc.rest_remaining_min > 0) {
+          phaseText += ' (' + wc.rest_remaining_min + ' min left)';
+        }
+        if (wc.phase === 'working' && wc.work_duration_min > 0) {
+          phaseText += ' (' + wc.phase_elapsed_min + '/' + wc.work_duration_min + ' min)';
+        }
+        wcPhaseEl.textContent = phaseText;
+        wcPhaseEl.style.color = wc.phase === 'working' ? '#00ff88' : wc.phase === 'resting' ? '#fbbf24' : '#6366f1';
+      }
+      if (wcCountEl) wcCountEl.textContent = wc.cycle_count || 0;
+
+      // Update daily limit display
+      if (data.daily_limit) {
+        var limitEl = document.getElementById('counterToday');
+        if (limitEl) limitEl.title = 'Daily limit: ' + formatNumber(data.daily_limit);
+      }
 
       if (blocks > 0) {
         blockWarningEl.classList.remove('hidden');
