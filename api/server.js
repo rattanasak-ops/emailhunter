@@ -93,6 +93,27 @@ log('Database initialized');
 try {
   const idxInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_company_name'").get();
   if (idxInfo && !idxInfo.sql.includes('UNIQUE')) {
+    // ลบ duplicate ก่อน — เก็บ row ที่มี status ดีที่สุด (found > not_found > pending)
+    const dupeCount = db.prepare("SELECT COUNT(*) as c FROM (SELECT company_name FROM companies GROUP BY company_name HAVING COUNT(*) > 1)").get().c;
+    if (dupeCount > 0) {
+      log(`Found ${dupeCount} duplicate company names — removing duplicates...`);
+      db.exec(`
+        DELETE FROM companies WHERE id NOT IN (
+          SELECT MIN(CASE WHEN status IN ('found','done') THEN id ELSE 999999999 END)
+          FROM companies GROUP BY company_name
+        ) AND company_name IN (
+          SELECT company_name FROM companies GROUP BY company_name HAVING COUNT(*) > 1
+        )
+      `);
+      // fallback: ถ้ายังมี duplicate (ไม่มี row ที่ found) เก็บ id ต่ำสุด
+      db.exec(`
+        DELETE FROM companies WHERE id NOT IN (
+          SELECT MIN(id) FROM companies GROUP BY company_name
+        )
+      `);
+      const remaining = db.prepare("SELECT COUNT(*) as c FROM companies").get().c;
+      log(`Duplicates removed. Remaining: ${remaining} companies`);
+    }
     log('Migrating idx_company_name to UNIQUE...');
     db.exec('DROP INDEX IF EXISTS idx_company_name');
     db.exec('CREATE UNIQUE INDEX idx_company_name ON companies(company_name)');
