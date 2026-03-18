@@ -62,7 +62,6 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_company_name ON companies(company_name);
   CREATE INDEX IF NOT EXISTS idx_status ON companies(status);
 
   CREATE TABLE IF NOT EXISTS daily_stats (
@@ -92,7 +91,7 @@ log('Database initialized');
 // ─── Migration: เปลี่ยน idx_company_name เป็น UNIQUE (ป้องกัน import ซ้ำ) ───
 try {
   const idxInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_company_name'").get();
-  if (idxInfo && !idxInfo.sql.includes('UNIQUE')) {
+  if (!idxInfo || !idxInfo.sql || !idxInfo.sql.includes('UNIQUE')) {
     // ลบ duplicate ก่อน — เก็บ row ที่มี status ดีที่สุด (found > not_found > pending)
     const dupeCount = db.prepare("SELECT COUNT(*) as c FROM (SELECT company_name FROM companies GROUP BY company_name HAVING COUNT(*) > 1)").get().c;
     if (dupeCount > 0) {
