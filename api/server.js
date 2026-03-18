@@ -12,6 +12,7 @@ const XLSX = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const http = require('http');
 
 const app = express();
 const PORT = 3456;
@@ -61,8 +62,8 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
   );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_company_name ON companies(company_name);
   CREATE INDEX IF NOT EXISTS idx_status ON companies(status);
-  CREATE INDEX IF NOT EXISTS idx_company_name ON companies(company_name);
 
   CREATE TABLE IF NOT EXISTS daily_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +88,66 @@ db.exec(`
 `);
 
 log('Database initialized');
+
+// ─── Migration: เปลี่ยน idx_company_name เป็น UNIQUE (ป้องกัน import ซ้ำ) ───
+try {
+  const idxInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_company_name'").get();
+  if (idxInfo && !idxInfo.sql.includes('UNIQUE')) {
+    log('Migrating idx_company_name to UNIQUE...');
+    db.exec('DROP INDEX IF EXISTS idx_company_name');
+    db.exec('CREATE UNIQUE INDEX idx_company_name ON companies(company_name)');
+    log('Migration complete: idx_company_name is now UNIQUE');
+  }
+} catch (e) {
+  log(`Migration warning: ${e.message}`);
+}
+
+// ─── Auto-sync daily_stats on startup ────────────────────────
+// ถ้า daily_stats ไม่ตรงกับ companies table → backfill อัตโนมัติ
+(function autoSyncDailyStats() {
+  try {
+    const companyTotal = db.prepare('SELECT COUNT(*) as cnt FROM companies WHERE status IN ("found","done","not_found","error")').get().cnt;
+    const statsTotal = db.prepare('SELECT COALESCE(SUM(processed),0) as cnt FROM daily_stats').get().cnt;
+
+    if (companyTotal > 0 && Math.abs(companyTotal - statsTotal) > 10) {
+      log(`daily_stats out of sync (companies: ${companyTotal}, stats: ${statsTotal}) — backfilling...`);
+
+      const rows = db.prepare(`
+        SELECT DATE(processed_date) as date,
+               COUNT(*) as processed,
+               SUM(CASE WHEN status IN ('found','done') AND email IS NOT NULL AND email != '' THEN 1 ELSE 0 END) as found,
+               SUM(CASE WHEN status = 'not_found' THEN 1 ELSE 0 END) as not_found,
+               SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors
+        FROM companies
+        WHERE processed_date IS NOT NULL
+        GROUP BY DATE(processed_date)
+      `).all();
+
+      const upsert = db.prepare(`
+        INSERT INTO daily_stats (date, processed, found, not_found, errors)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET
+          processed = excluded.processed,
+          found = excluded.found,
+          not_found = excluded.not_found,
+          errors = excluded.errors
+      `);
+
+      const tx = db.transaction(() => {
+        for (const r of rows) {
+          if (r.date) upsert.run(r.date, r.processed, r.found, r.not_found, r.errors);
+        }
+      });
+      tx();
+
+      log(`daily_stats backfilled: ${rows.length} dates synced`);
+    } else {
+      log('daily_stats in sync');
+    }
+  } catch (err) {
+    log(`daily_stats sync error: ${err.message}`);
+  }
+})();
 
 // ─── Anti-Blocking Engine ────────────────────────────────────
 
@@ -205,6 +266,10 @@ let sessionFound = 0;
 let sessionBlocksDetected = 0;
 const recentSpeeds = []; // timestamps of last 10 results for speed calc
 
+// ─── Manual Override Control ─────────────────────────────────
+let manualMode = null; // null = auto (schedule), 'running' = force run, 'stopped' = force stop
+let manualModeSetAt = null;
+
 function todayStr() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }); // YYYY-MM-DD
 }
@@ -263,8 +328,9 @@ app.get('/api/companies/next', (req, res) => {
   try {
     const processedToday = getProcessedToday();
     const withinSchedule = isWithinSchedule();
-    const forceRun = req.query.force === 'true';
-    const shouldStop = (!withinSchedule && !forceRun) || processedToday >= DAILY_LIMIT;
+    const forceRun = req.query.force === 'true' || manualMode === 'running';
+    const forceStop = manualMode === 'stopped';
+    const shouldStop = forceStop || ((!withinSchedule && !forceRun) || processedToday >= DAILY_LIMIT);
 
     // Find next pending (or retry) company
     const company = db.prepare(
@@ -278,6 +344,18 @@ app.get('/api/companies/next', (req, res) => {
     ).get();
 
     if (!company) {
+      // Log session when stopping due to no pending companies
+      if (sessionStartTime && sessionProcessed > 0) {
+        db.prepare(`
+          INSERT INTO session_log (start_time, end_time, processed, found, not_found, errors, blocks_detected)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(sessionStartTime, nowTimeStr(), sessionProcessed, sessionFound, sessionProcessed - sessionFound, 0, sessionBlocksDetected);
+        log(`Session logged: ${sessionProcessed} processed, ${sessionFound} found`);
+        sessionStartTime = null;
+        sessionProcessed = 0;
+        sessionFound = 0;
+        sessionBlocksDetected = 0;
+      }
       return res.json({
         company: null,
         session: { should_stop: true, reason: 'no_pending' },
@@ -285,6 +363,18 @@ app.get('/api/companies/next', (req, res) => {
     }
 
     if (shouldStop) {
+      // Log session when stopping due to schedule/limit
+      if (sessionStartTime && sessionProcessed > 0) {
+        db.prepare(`
+          INSERT INTO session_log (start_time, end_time, processed, found, not_found, errors, blocks_detected)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(sessionStartTime, nowTimeStr(), sessionProcessed, sessionFound, sessionProcessed - sessionFound, 0, sessionBlocksDetected);
+        log(`Session logged: ${sessionProcessed} processed, ${sessionFound} found`);
+        sessionStartTime = null;
+        sessionProcessed = 0;
+        sessionFound = 0;
+        sessionBlocksDetected = 0;
+      }
       return res.json({
         company: null,
         session: {
@@ -393,6 +483,13 @@ const BLACKLIST_DOMAINS = [
   'pronalityacademy.com', 'thaiinternships.com',
   'lifestyletech.co.th', 'jorakay.co.th', 'prompt1992.com',
   'gfreight.co.th', 'qbic.co.th', 'yellbkk.com',
+  // Hospitals / unrelated from round 6
+  'thainakarin.co.th', 'bumrungrad.com', 'bdms.co.th',
+  // Recruitment / HR platforms
+  'trustmail.jobthai', 'getlinks.com', 'prtr.com', 'adecco.co.th',
+  'manpower.co.th', 'randstad.co.th', 'roberthalf.co.th',
+  // Microsoft / tech support
+  'microsoft.com', 'apple.com', 'support.com',
 ];
 
 // Generic email providers — these are OK for Thai SMEs
@@ -441,12 +538,51 @@ function isGenericProvider(email) {
   return GENERIC_PROVIDERS.includes(domain);
 }
 
+// ─── Company Name → English Domain Matching ─────────────────
+// Common Thai→English transliterations for company name matching
+const THAI_COMPANY_SUFFIXES = /บริษัท|จำกัด|มหาชน|\(ประเทศไทย\)|ห้างหุ้นส่วน|สามัญ|จำกัด\s*\(มหาชน\)/g;
+
+function normalizeCompanyName(name) {
+  return name
+    .replace(THAI_COMPANY_SUFFIXES, '')
+    .replace(/[\s().,\-\/&]/g, '')
+    .toLowerCase();
+}
+
+// Extract possible English keywords from company name (Thai names often have English parts)
+function extractEnglishParts(name) {
+  const english = name.match(/[a-zA-Z]{3,}/g) || [];
+  return english.map(e => e.toLowerCase());
+}
+
+// Check if email domain is plausibly related to company
+function isDomainRelatedToCompany(domain, companyName) {
+  const domainBase = domain.split('.')[0].toLowerCase();
+  if (domainBase.length < 2) return false;
+
+  const cleanName = normalizeCompanyName(companyName);
+  const englishParts = extractEnglishParts(companyName);
+
+  // Direct match: domain appears in company name or vice versa
+  if (cleanName.includes(domainBase) || domainBase.includes(cleanName.slice(0, 4))) return true;
+
+  // English part match: e.g. company "ไอร่า แคปปิตอล" has domain "aira.co.th"
+  if (englishParts.some(ep => domainBase.includes(ep) || ep.includes(domainBase))) return true;
+
+  // Abbreviation match: e.g. "แอดวานซ์ อินโฟร์ เซอร์วิส" → "ais"
+  const initials = companyName.replace(THAI_COMPANY_SUFFIXES, '').trim().split(/\s+/).map(w => w[0] || '').join('').toLowerCase();
+  if (initials.length >= 2 && domainBase.includes(initials)) return true;
+
+  return false;
+}
+
 // Score email quality: higher = better
 function scoreEmail(email, companyName) {
   if (!email) return -1;
   const lower = email.toLowerCase();
-  const domain = lower.split('@')[1] || '';
-  const domainBase = domain.split('.')[0]; // e.g. 'tupack' from 'tupack.co.th'
+  const [localPart, domain] = lower.split('@');
+  if (!domain) return -1;
+  const domainBase = domain.split('.')[0];
 
   // Already assigned to another company → likely directory email
   const assignCount = emailAssignmentCount[lower] || 0;
@@ -455,42 +591,52 @@ function scoreEmail(email, companyName) {
   // Blacklisted → reject
   if (isBlacklistedEmail(email)) return -10;
 
-  // Generic provider (gmail, hotmail) → acceptable for SMEs
-  if (isGenericProvider(email)) return 50;
+  // Generic provider (gmail, hotmail) → acceptable only with business-like local part
+  if (isGenericProvider(email)) {
+    // Prefer local parts that look business-related (contain company-related words)
+    const englishParts = extractEnglishParts(companyName);
+    const hasCompanyRef = englishParts.some(ep => localPart.includes(ep));
+    if (hasCompanyRef) return 60; // gmail but has company name reference
+    // Generic gmail without company ref = low quality
+    if (['info', 'sales', 'contact', 'hr', 'admin', 'acc'].some(p => localPart.startsWith(p))) return 40;
+    return 25; // random gmail — low quality
+  }
 
   // Company-specific domain: check if related to company name
-  // Normalize company name: remove common Thai suffixes
-  const cleanName = companyName
-    .replace(/บริษัท|จำกัด|มหาชน|\(ประเทศไทย\)|ห้างหุ้นส่วน|สามัญ/g, '')
-    .replace(/[\s().,\-]/g, '')
-    .toLowerCase();
-
-  // Check if domain base appears in company name or vice versa
-  if (cleanName.includes(domainBase) || domainBase.includes(cleanName.slice(0, 4))) {
+  if (isDomainRelatedToCompany(domain, companyName)) {
+    // Strong match — domain belongs to the company
+    if (['info', 'contact', 'sales', 'hr', 'admin', 'support'].some(p => localPart.startsWith(p))) return 120;
     return 100; // strong match
   }
 
-  // Check English transliteration hints (partial match)
-  // If domain has 3+ chars that appear in sequence in company name
-  const domainChars = domainBase.replace(/[^a-z]/g, '');
-  if (domainChars.length >= 3) {
-    // Domain is a real company domain but doesn't match our target company
-    // This is suspicious — could be from search results of wrong company
-    return 30; // low confidence
+  // .co.th domains — likely a real Thai company, give moderate score
+  if (domain.endsWith('.co.th')) {
+    // Business-like prefix = somewhat trustworthy
+    if (['info', 'contact', 'sales', 'hr', 'admin', 'support', 'service'].some(p => localPart.startsWith(p))) return 35;
+    return 25; // .co.th but can't verify match — still above threshold
   }
 
-  return 40; // unknown domain, medium confidence
+  // .com domains without match — could be any company
+  if (domain.endsWith('.com')) {
+    if (['info', 'contact', 'sales', 'hr', 'admin'].some(p => localPart.startsWith(p))) return 25;
+    return 15; // low confidence
+  }
+
+  return 20; // unknown TLD, low confidence
 }
 
 function filterValidEmails(emails, companyName) {
   if (!emails) return { best: null, all: [], confidence: 'none' };
   const list = Array.isArray(emails) ? emails : [emails];
 
+  // Minimum score threshold — reject emails that are likely wrong company
+  const MIN_SCORE = 20;
+
   // Score and sort
   const scored = list
     .filter(e => e && typeof e === 'string')
     .map(e => ({ email: e, score: scoreEmail(e, companyName) }))
-    .filter(x => x.score > 0)
+    .filter(x => x.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score);
 
   if (scored.length === 0) return { best: null, all: [], confidence: 'none' };
@@ -615,6 +761,178 @@ app.post('/api/companies/:id/result', (req, res) => {
   }
 });
 
+// ─── Manual Session Control + Built-in Worker ───────────────
+
+let workerRunning = false;
+let workerTimer = null;
+
+// Search SearXNG directly from API
+function searchSearXNG(query, engines) {
+  return new Promise((resolve, reject) => {
+    const url = `http://emailhunter-searxng:8080/search?q=${encodeURIComponent(query)}&format=json&engines=${engines}`;
+    http.get(url, { timeout: 15000 }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
+      });
+    }).on('error', reject).on('timeout', function() { this.destroy(); reject(new Error('timeout')); });
+  });
+}
+
+// Extract emails from search results
+function extractEmails(results) {
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emails = new Set();
+  for (const r of (results || [])) {
+    const text = [r.title, r.content, r.url].filter(Boolean).join(' ');
+    const found = text.match(emailRegex) || [];
+    found.forEach(e => emails.add(e.toLowerCase()));
+  }
+  return [...emails];
+}
+
+// Process one company
+async function processOneCompany() {
+  if (manualMode !== 'running' || !workerRunning) return false;
+
+  const company = db.prepare(
+    `SELECT id, company_name FROM companies WHERE status IN ('pending','retry') ORDER BY CASE WHEN status='retry' THEN 0 ELSE 1 END, id ASC LIMIT 1`
+  ).get();
+
+  if (!company) {
+    log('Worker: no pending companies');
+    return false;
+  }
+
+  try {
+    const query = buildQuery(company.company_name);
+    const engines = pickEngine();
+    log(`Worker: searching "${company.company_name}" [${engines}]`);
+
+    const searchResult = await searchSearXNG(query, engines);
+    const allEmails = extractEmails(searchResult.results || []);
+    const filtered = filterValidEmails(allEmails, company.company_name);
+
+    const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(' ', 'T');
+    const today = todayStr();
+    ensureDailyStats(today);
+
+    let status, email;
+    if (filtered.best) {
+      status = 'found';
+      email = filtered.best;
+      sessionFound++;
+      db.prepare('UPDATE daily_stats SET processed = processed + 1, found = found + 1 WHERE date = ?').run(today);
+    } else {
+      status = 'not_found';
+      email = null;
+      db.prepare('UPDATE daily_stats SET processed = processed + 1, not_found = not_found + 1 WHERE date = ?').run(today);
+    }
+
+    const allEmailsStr = filtered.all.join(', ') || null;
+    db.prepare(`UPDATE companies SET email=?, all_emails=?, status=?, processed_date=?, updated_at=? WHERE id=?`)
+      .run(email, allEmailsStr, status, now, now, company.id);
+
+    sessionProcessed++;
+    recentSpeeds.push(Date.now());
+    if (recentSpeeds.length > 20) recentSpeeds.shift();
+    trackResult(false);
+
+    log(`Worker: ${company.company_name} → ${status}${email ? ' (' + email + ')' : ''}`);
+    return true;
+  } catch (err) {
+    log(`Worker ERROR: ${company.company_name} — ${err.message}`);
+    trackResult(true);
+    const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(' ', 'T');
+    db.prepare(`UPDATE companies SET status='retry', error_message=?, retry_count=retry_count+1, updated_at=? WHERE id=?`)
+      .run(err.message, now, company.id);
+    sessionProcessed++;
+    return true;
+  }
+}
+
+// Worker loop
+async function workerLoop() {
+  if (!workerRunning || manualMode !== 'running') {
+    workerRunning = false;
+    log('Worker stopped');
+    return;
+  }
+
+  const hasMore = await processOneCompany();
+
+  if (!hasMore) {
+    workerRunning = false;
+    manualMode = null;
+    log('Worker finished — no more pending');
+    return;
+  }
+
+  // Anti-block delay (8-20 seconds)
+  const delay = gaussianDelay();
+  const breakCheck = checkSessionBreak();
+
+  if (breakCheck.shouldPause) {
+    log(`Worker: coffee break ${breakCheck.pauseDuration}s`);
+    workerTimer = setTimeout(workerLoop, breakCheck.pauseDuration * 1000);
+  } else {
+    workerTimer = setTimeout(workerLoop, delay * 1000);
+  }
+}
+
+// Start manual session
+app.post('/api/session/start', (req, res) => {
+  manualMode = 'running';
+  manualModeSetAt = new Date().toISOString();
+  sessionStartTime = new Date().toISOString();
+  sessionProcessed = 0;
+  sessionFound = 0;
+  sessionBlocksDetected = 0;
+
+  if (!workerRunning) {
+    workerRunning = true;
+    log(`MANUAL START — worker started by user`);
+    workerLoop(); // Start processing immediately
+  }
+
+  res.json({ success: true, mode: 'running', message: 'Processing started.' });
+});
+
+// Stop session
+app.post('/api/session/stop', (req, res) => {
+  manualMode = 'stopped';
+  manualModeSetAt = new Date().toISOString();
+  workerRunning = false;
+  if (workerTimer) { clearTimeout(workerTimer); workerTimer = null; }
+  log(`MANUAL STOP — worker stopped by user (processed: ${sessionProcessed}, found: ${sessionFound})`);
+  res.json({ success: true, mode: 'stopped', message: `Stopped. This run: ${sessionProcessed} processed, ${sessionFound} found.` });
+});
+
+// Resume auto mode (back to schedule)
+app.post('/api/session/auto', (req, res) => {
+  manualMode = null;
+  manualModeSetAt = null;
+  workerRunning = false;
+  if (workerTimer) { clearTimeout(workerTimer); workerTimer = null; }
+  log(`AUTO MODE — returned to schedule (01:00-09:00)`);
+  res.json({ success: true, mode: 'auto', message: 'Back to automatic schedule.' });
+});
+
+// Get current session mode
+app.get('/api/session/status', (req, res) => {
+  res.json({
+    mode: manualMode || 'auto',
+    set_at: manualModeSetAt,
+    worker_running: workerRunning,
+    within_schedule: isWithinSchedule(),
+    session_active: sessionStartTime !== null,
+    session_start: sessionStartTime,
+    processed_today: getProcessedToday(),
+    daily_limit: DAILY_LIMIT,
+  });
+});
+
 // Full stats for dashboard
 app.get('/api/stats', (req, res) => {
   try {
@@ -673,7 +991,9 @@ app.get('/api/stats', (req, res) => {
 
     // Determine system status
     let systemStatus = 'idle';
-    if (sessionStartTime) {
+    if (workerRunning) {
+      systemStatus = 'running';
+    } else if (sessionStartTime) {
       const lastActivity = recentSpeeds.length > 0 ? recentSpeeds[recentSpeeds.length - 1] : 0;
       const sinceLastActivity = lastActivity > 0 ? (Date.now() - lastActivity) / 1000 : Infinity;
       if (sinceLastActivity < 120) {
@@ -736,10 +1056,15 @@ app.get('/api/stats', (req, res) => {
         date: today,
         processed: todayStats.processed,
         found: todayStats.found,
+        not_found: todayStats.not_found,
+        errors: todayStats.errors || 0,
+        blocks_detected: todayStats.blocks_detected || 0,
       },
       daily_history: dailyHistory,
       recent,
       error_log: errorLog,
+      manual_mode: manualMode || 'auto',
+      within_schedule: isWithinSchedule(),
     });
   } catch (err) {
     log(`ERROR /api/stats: ${err.message}`);
@@ -1118,15 +1443,272 @@ app.listen(PORT, '0.0.0.0', () => {
   log(`Daily limit: ${DAILY_LIMIT} queries`);
 });
 
-// Graceful shutdown
+// ─── CSV Restore (import results back from exported CSV) ─────
+app.post('/api/restore', upload.single('file'), (req, res) => {
+  let filePath = null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    filePath = req.file.path;
+
+    log(`Restoring from file: ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)}MB)`);
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    // Remove BOM if present
+    const clean = content.replace(/^\uFEFF/, '');
+    const lines = clean.split('\n').filter(l => l.trim());
+
+    if (lines.length < 2) {
+      return res.status(400).json({ error: 'Empty CSV file' });
+    }
+
+    // Parse header
+    const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const companyIdx = header.indexOf('company_name');
+    const emailIdx = header.indexOf('email');
+    const allEmailsIdx = header.indexOf('all_emails');
+    const sourceUrlIdx = header.indexOf('source_url');
+    const statusIdx = header.indexOf('status');
+    const dateIdx = header.indexOf('processed_date');
+
+    if (companyIdx === -1) {
+      return res.status(400).json({ error: 'Missing company_name column' });
+    }
+
+    // Parse CSV rows (handle quoted fields)
+    function parseCSVLine(line) {
+      const fields = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch === ',' && !inQuotes) {
+          fields.push(current);
+          current = '';
+        } else {
+          current += ch;
+        }
+      }
+      fields.push(current);
+      return fields;
+    }
+
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO companies (company_name, email, all_emails, source_url, status, processed_date, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+    `);
+
+    let imported = 0;
+    let duplicates = 0;
+    let errors = 0;
+    const CHUNK_SIZE = 500;
+
+    const insertChunk = db.transaction((chunk) => {
+      for (const fields of chunk) {
+        try {
+          const name = (fields[companyIdx] || '').trim();
+          if (!name) { errors++; continue; }
+
+          const email = emailIdx >= 0 ? (fields[emailIdx] || '').trim() || null : null;
+          const allEmails = allEmailsIdx >= 0 ? (fields[allEmailsIdx] || '').trim() || null : null;
+          const sourceUrl = sourceUrlIdx >= 0 ? (fields[sourceUrlIdx] || '').trim() || null : null;
+          const status = statusIdx >= 0 ? (fields[statusIdx] || '').trim() || 'pending' : 'pending';
+          const date = dateIdx >= 0 ? (fields[dateIdx] || '').trim() || null : null;
+
+          const result = insert.run(name, email, allEmails, sourceUrl, status, date);
+          if (result.changes > 0) {
+            imported++;
+          } else {
+            duplicates++;
+          }
+        } catch (e) {
+          errors++;
+        }
+      }
+    });
+
+    const dataRows = [];
+    for (let i = 1; i < lines.length; i++) {
+      dataRows.push(parseCSVLine(lines[i]));
+    }
+
+    for (let i = 0; i < dataRows.length; i += CHUNK_SIZE) {
+      insertChunk(dataRows.slice(i, i + CHUNK_SIZE));
+      if (i % 2000 === 0 && i > 0) {
+        log(`Restore progress: ${i}/${dataRows.length}`);
+      }
+    }
+
+    log(`Restore complete: ${imported} imported, ${duplicates} duplicates, ${errors} errors`);
+
+    try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+    res.json({
+      success: true,
+      imported,
+      duplicates,
+      errors,
+      total: dataRows.length,
+    });
+  } catch (err) {
+    log(`ERROR /api/restore: ${err.message}`);
+    if (filePath) {
+      try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Auto-Backup System ─────────────────────────────────────
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+function performBackup() {
+  try {
+    const total = db.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
+    if (total === 0) {
+      log('Backup skipped — database is empty');
+      return;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupPath = path.join(BACKUP_DIR, `emailhunter_${timestamp}.db`);
+
+    // Use SQLite backup API
+    db.backup(backupPath).then(() => {
+      log(`Backup created: ${backupPath} (${total} companies)`);
+
+      // Keep only last 7 backups
+      const backups = fs.readdirSync(BACKUP_DIR)
+        .filter(f => f.startsWith('emailhunter_') && f.endsWith('.db'))
+        .sort()
+        .reverse();
+
+      for (let i = 7; i < backups.length; i++) {
+        fs.unlinkSync(path.join(BACKUP_DIR, backups[i]));
+        log(`Deleted old backup: ${backups[i]}`);
+      }
+    }).catch(err => {
+      log(`Backup FAILED: ${err.message}`);
+    });
+  } catch (err) {
+    log(`Backup error: ${err.message}`);
+  }
+}
+
+// Backup every 6 hours
+const BACKUP_INTERVAL = 6 * 60 * 60 * 1000;
+setInterval(performBackup, BACKUP_INTERVAL);
+// Also backup 5 seconds after startup
+setTimeout(performBackup, 5000);
+
+// Manual backup endpoint
+app.post('/api/backup', (req, res) => {
+  try {
+    performBackup();
+    res.json({ success: true, message: 'Backup initiated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List backups
+app.get('/api/backups', (req, res) => {
+  try {
+    const backups = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('emailhunter_') && f.endsWith('.db'))
+      .sort()
+      .reverse()
+      .map(f => {
+        const stat = fs.statSync(path.join(BACKUP_DIR, f));
+        return { name: f, size_mb: (stat.size / 1024 / 1024).toFixed(1), date: stat.mtime.toISOString() };
+      });
+    res.json({ backups });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Restore from backup
+app.post('/api/backup/restore', (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: 'Backup name required' });
+
+    const backupPath = path.join(BACKUP_DIR, name);
+    if (!fs.existsSync(backupPath)) return res.status(404).json({ error: 'Backup not found' });
+
+    // Validate the backup is a valid SQLite DB
+    const testDb = new Database(backupPath, { readonly: true });
+    const count = testDb.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
+    testDb.close();
+
+    // Copy backup over current DB
+    const dbPath = path.join(DATA_DIR, 'emailhunter.db');
+    fs.copyFileSync(backupPath, dbPath);
+
+    log(`Restored from backup: ${name} (${count} companies)`);
+    res.json({ success: true, message: `Restored ${count} companies from ${name}. Restart container to apply.` });
+  } catch (err) {
+    log(`Restore from backup error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── CSV Auto-Export on shutdown ─────────────────────────────
+function exportCSVBackup() {
+  try {
+    const total = db.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
+    if (total === 0) return;
+
+    const rows = db.prepare(`
+      SELECT company_name, email, all_emails, source_url, status, processed_date
+      FROM companies ORDER BY id
+    `).all();
+
+    const BOM = '\uFEFF';
+    const header = 'company_name,email,all_emails,source_url,status,processed_date';
+    const csvRows = rows.map(r => {
+      return [
+        csvEscape(r.company_name),
+        csvEscape(r.email),
+        csvEscape(r.all_emails),
+        csvEscape(r.source_url),
+        csvEscape(r.status),
+        csvEscape(r.processed_date),
+      ].join(',');
+    });
+
+    const csv = BOM + header + '\n' + csvRows.join('\n');
+    const csvPath = path.join(BACKUP_DIR, `auto_export_${todayStr()}.csv`);
+    fs.writeFileSync(csvPath, csv, 'utf-8');
+    log(`Auto CSV export: ${csvPath} (${rows.length} rows)`);
+  } catch (err) {
+    log(`CSV export error: ${err.message}`);
+  }
+}
+
+// Graceful shutdown — backup before exit
 process.on('SIGINT', () => {
-  log('Shutting down...');
+  log('Shutting down... creating backup');
+  performBackup();
+  exportCSVBackup();
   db.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  log('Shutting down...');
+  log('Shutting down... creating backup');
+  performBackup();
+  exportCSVBackup();
   db.close();
   process.exit(0);
 });

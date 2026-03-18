@@ -21,6 +21,21 @@
     },
     {
       "parameters": {
+        "path": "emailhunter-manual-start",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook-trigger",
+      "name": "Manual Start Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 500],
+      "webhookId": "emailhunter-manual-start",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
         "method": "GET",
         "url": "http://emailhunter-api:3456/api/companies/next",
         "options": {
@@ -325,6 +340,17 @@
   ],
   "connections": {
     "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Next Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Start Webhook": {
       "main": [
         [
           {

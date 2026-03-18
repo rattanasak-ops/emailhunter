@@ -151,6 +151,41 @@
       50% { box-shadow: 0 0 0 8px rgba(251, 191, 36, 0); }
     }
 
+    /* === Session Toggle Button === */
+    .session-toggle.state-idle {
+      background: rgba(0, 255, 136, 0.15);
+      border: 2px solid #00ff88;
+      color: #00ff88;
+    }
+    .session-toggle.state-idle:hover {
+      background: rgba(0, 255, 136, 0.3);
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+    }
+    .session-toggle.state-running {
+      background: rgba(255, 51, 102, 0.15);
+      border: 2px solid #ff3366;
+      color: #ff3366;
+      animation: pulseRunning 2s ease-in-out infinite;
+    }
+    .session-toggle.state-running:hover {
+      background: rgba(255, 51, 102, 0.3);
+      box-shadow: 0 0 20px rgba(255, 51, 102, 0.3);
+    }
+    .session-toggle.state-stopped {
+      background: rgba(100, 116, 139, 0.15);
+      border: 2px solid #64748b;
+      color: #94a3b8;
+    }
+    .session-toggle.state-stopped:hover {
+      background: rgba(0, 255, 136, 0.15);
+      border-color: #00ff88;
+      color: #00ff88;
+    }
+    @keyframes pulseRunning {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 51, 102, 0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(255, 51, 102, 0); }
+    }
+
     /* === Status Badge === */
     .badge-done { background: rgba(0,255,136,0.15); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); }
     .badge-not-found { background: rgba(255,51,102,0.15); color: #ff3366; border: 1px solid rgba(255,51,102,0.3); }
@@ -329,6 +364,26 @@
           <span class="pulse-dot"></span>
           <span id="statusText" class="text-eh-green font-medium">Running</span>
         </div>
+        <!-- Session Control — Toggle Button + Live Counter -->
+        <div id="sessionControl" class="flex items-center gap-2">
+          <button id="btnToggle" onclick="toggleSession()"
+            class="session-toggle px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2"
+            style="min-width: 120px; justify-content: center;">
+            <span id="toggleIcon">&#9654;</span>
+            <span id="toggleLabel">Start</span>
+          </button>
+          <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-eh-card border border-eh-border text-xs">
+            <span class="text-eh-text2">Today:</span>
+            <span id="counterToday" class="text-eh-green font-bold">0</span>
+            <span class="text-eh-text2">|</span>
+            <span class="text-eh-text2">Run:</span>
+            <span id="counterSession" class="text-eh-blue font-bold">0</span>
+          </div>
+          <button id="btnAutoReset" onclick="sessionControl('auto')"
+            class="px-2.5 py-1.5 rounded-full text-[10px] font-medium bg-eh-card border border-eh-border text-eh-text2 hover:text-eh-blue hover:border-eh-blue/50 transition-all cursor-pointer hidden">
+            &#8635; Auto
+          </button>
+        </div>
       </div>
     </header>
 
@@ -505,10 +560,44 @@
     <!-- ============================================================ -->
     <!-- 6. Charts -->
     <!-- ============================================================ -->
+
+    <!-- Daily Summary Chart — รายวัน Total/Done/Found/NotFound/Rate -->
+    <div class="card p-5 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-medium text-eh-text2 uppercase tracking-wider">Daily Summary (14 วัน)</h3>
+        <div class="flex items-center gap-4 text-xs text-eh-text2">
+          <span class="flex items-center gap-1"><span style="width:12px;height:8px;border-radius:2px;background:#00d4ff;display:inline-block;"></span> Total</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:8px;border-radius:2px;background:#a855f7;display:inline-block;"></span> Done</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:8px;border-radius:2px;background:#00ff88;display:inline-block;"></span> Found</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:8px;border-radius:2px;background:#ff3366;display:inline-block;"></span> Not Found</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:3px;border-radius:1px;background:#fbbf24;display:inline-block;border-top:1px dashed #fbbf24;"></span> Rate %</span>
+        </div>
+      </div>
+      <div style="height: 320px;">
+        <canvas id="dailySummaryChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Cumulative Daily Trend — Full Width -->
+    <div class="card p-5 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-medium text-eh-text2 uppercase tracking-wider">Daily Trend (14 วัน) — สะสม</h3>
+        <div id="trendLegend" class="flex items-center gap-4 text-xs text-eh-text2">
+          <span class="flex items-center gap-1"><span style="width:12px;height:3px;border-radius:1px;background:#00d4ff;display:inline-block;"></span> Total สะสม</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:3px;border-radius:1px;background:#00ff88;display:inline-block;"></span> Found สะสม</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:3px;border-radius:1px;background:#ff3366;display:inline-block;"></span> Not Found สะสม</span>
+          <span class="flex items-center gap-1"><span style="width:12px;height:3px;border-radius:1px;background:#fbbf24;display:inline-block;border-top:1px dashed #fbbf24;"></span> Rate %</span>
+        </div>
+      </div>
+      <div style="height: 320px;">
+        <canvas id="cumulativeTrendChart"></canvas>
+      </div>
+    </div>
+
     <div class="chart-grid grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-      <!-- Daily Trend Bar Chart -->
+      <!-- Daily Bar Chart (Processed vs Found per day) -->
       <div class="card p-5">
-        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Daily Trend (14 วัน)</h3>
+        <h3 class="text-sm font-medium text-eh-text2 mb-4 uppercase tracking-wider">Daily Breakdown</h3>
         <div style="height: 250px;">
           <canvas id="dailyChart"></canvas>
         </div>
@@ -652,6 +741,8 @@
 
     let dailyChart = null;
     let donutChart = null;
+    let cumulativeTrendChart = null;
+    let dailySummaryChart = null;
     let isFirstLoad = true;
     let lastData = null;
     let selectedFile = null;
@@ -954,6 +1045,8 @@
         pct + '% (' + formatNumber(data.processed || 0) + ' / ' + formatNumber(data.total_companies || 0) + ')';
 
       // --- Charts ---
+      updateDailySummaryChart(data);
+      updateCumulativeTrendChart(data);
       updateDailyChart(data);
       updateDonutChart(data);
 
@@ -972,6 +1065,13 @@
 
       // --- Status badge ---
       updateStatusBadge(data);
+
+      // --- Manual mode + actual status indicator ---
+      updateModeUI(data.manual_mode || 'auto', data.status || 'idle');
+
+      // --- Live counters (Today + This Run) ---
+      document.getElementById('counterToday').textContent = data.today ? (data.today.found || 0) : 0;
+      document.getElementById('counterSession').textContent = data.session ? (data.session.found_this_session || 0) : 0;
     }
 
     // ============================================================
@@ -1040,18 +1140,351 @@
       gridColor: 'rgba(30,30,58,0.5)',
     };
 
-    function updateDailyChart(data) {
-      const history = [...(data.daily_history || [])].reverse().slice(-13);
-      if (data.today && data.today.date) history.push(data.today);
+    // Fill missing dates to get continuous 14-day range
+    function buildFullDateRange(historyData, todayData) {
+      // Build a map of date → data
+      var dateMap = {};
+      var rawHistory = [...(historyData || [])].reverse();
+      for (var i = 0; i < rawHistory.length; i++) {
+        if (rawHistory[i].date) dateMap[rawHistory[i].date] = rawHistory[i];
+      }
+      // Add today (overwrite if exists)
+      if (todayData && todayData.date) {
+        dateMap[todayData.date] = todayData;
+      }
 
-      const labels = history.map(function(d) { return d.date ? d.date.slice(5) : ''; });
-      const processed = history.map(function(d) { return d.processed || 0; });
-      const found = history.map(function(d) { return d.found || 0; });
+      // Generate last 14 days
+      var days = [];
+      var now = new Date();
+      for (var d = 13; d >= 0; d--) {
+        var dt = new Date(now);
+        dt.setDate(dt.getDate() - d);
+        var key = dt.toISOString().slice(0, 10);
+        days.push({
+          date: key,
+          processed: dateMap[key] ? (dateMap[key].processed || 0) : 0,
+          found: dateMap[key] ? (dateMap[key].found || 0) : 0,
+          not_found: dateMap[key] ? (dateMap[key].not_found || 0) : 0,
+          errors: dateMap[key] ? (dateMap[key].errors || 0) : 0,
+        });
+      }
+      return days;
+    }
+
+    function updateDailySummaryChart(data) {
+      var days = buildFullDateRange(data.daily_history, data.today);
+
+      var labels = days.map(function(d) { return d.date.slice(5); });
+
+      var totalData = days.map(function(d) { return d.processed || 0; });
+      var doneData = days.map(function(d) { return (d.found || 0) + (d.not_found || 0) + (d.errors || 0); });
+      var foundData = days.map(function(d) { return d.found || 0; });
+      var notFoundData = days.map(function(d) { return d.not_found || 0; });
+      var rateData = days.map(function(d) {
+        var done = (d.found || 0) + (d.not_found || 0);
+        return done > 0 ? Math.round((d.found / done) * 1000) / 10 : 0;
+      });
+
+      if (dailySummaryChart) {
+        dailySummaryChart.data.labels = labels;
+        dailySummaryChart.data.datasets[0].data = totalData;
+        dailySummaryChart.data.datasets[1].data = doneData;
+        dailySummaryChart.data.datasets[2].data = foundData;
+        dailySummaryChart.data.datasets[3].data = notFoundData;
+        dailySummaryChart.data.datasets[4].data = rateData;
+        dailySummaryChart.update('none');
+      } else {
+        var ctx = document.getElementById('dailySummaryChart');
+        if (!ctx) return;
+        dailySummaryChart = new Chart(ctx.getContext('2d'), {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Total',
+                data: totalData,
+                backgroundColor: 'rgba(0, 212, 255, 0.6)',
+                borderColor: '#00d4ff',
+                borderWidth: 1,
+                borderRadius: 4,
+                yAxisID: 'y',
+                order: 4,
+              },
+              {
+                label: 'Done',
+                data: doneData,
+                backgroundColor: 'rgba(168, 85, 247, 0.5)',
+                borderColor: '#a855f7',
+                borderWidth: 1,
+                borderRadius: 4,
+                yAxisID: 'y',
+                order: 3,
+              },
+              {
+                label: 'Found',
+                data: foundData,
+                backgroundColor: 'rgba(0, 255, 136, 0.6)',
+                borderColor: '#00ff88',
+                borderWidth: 1,
+                borderRadius: 4,
+                yAxisID: 'y',
+                order: 2,
+              },
+              {
+                label: 'Not Found',
+                data: notFoundData,
+                backgroundColor: 'rgba(255, 51, 102, 0.5)',
+                borderColor: '#ff3366',
+                borderWidth: 1,
+                borderRadius: 4,
+                yAxisID: 'y',
+                order: 1,
+              },
+              {
+                label: 'Rate %',
+                type: 'line',
+                data: rateData,
+                borderColor: '#fbbf24',
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#fbbf24',
+                pointBorderColor: '#0a0a0f',
+                pointBorderWidth: 2,
+                borderDash: [6, 3],
+                tension: 0.3,
+                yAxisID: 'y1',
+                order: 0,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false,
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: 'rgba(18,18,26,0.95)',
+                titleColor: '#e2e8f0',
+                bodyColor: '#e2e8f0',
+                borderColor: '#1e1e3a',
+                borderWidth: 1,
+                padding: 12,
+                bodyFont: chartDefaults.fontStyle,
+                titleFont: chartDefaults.fontStyle,
+                callbacks: {
+                  label: function(ctx) {
+                    if (ctx.dataset.label === 'Rate %') {
+                      return ctx.dataset.label + ': ' + ctx.parsed.y + '%';
+                    }
+                    return ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString();
+                  }
+                }
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#64748b', font: chartDefaults.fontStyle, maxRotation: 45 },
+                grid: { color: 'rgba(30,30,58,0.3)' }
+              },
+              y: {
+                type: 'linear',
+                display: true,
+                position: 'left',
+                beginAtZero: true,
+                title: { display: true, text: 'จำนวน/วัน', color: '#64748b', font: chartDefaults.fontStyle },
+                ticks: { color: '#64748b', font: chartDefaults.fontStyle },
+                grid: { color: 'rgba(30,30,58,0.3)' },
+              },
+              y1: {
+                type: 'linear',
+                display: true,
+                position: 'right',
+                title: { display: true, text: 'Rate %', color: '#fbbf24', font: chartDefaults.fontStyle },
+                ticks: { color: '#fbbf24', font: chartDefaults.fontStyle, callback: function(v) { return v + '%'; } },
+                grid: { drawOnChartArea: false },
+                min: 0,
+                max: 100,
+              }
+            }
+          }
+        });
+      }
+    }
+
+    function updateCumulativeTrendChart(data) {
+      var days = buildFullDateRange(data.daily_history, data.today);
+
+      var labels = days.map(function(d) { return d.date.slice(5); }); // MM-DD
+
+      // Build cumulative data
+      var cumTotal = [], cumFound = [], cumNotFound = [], rateData = [];
+      var runTotal = 0, runFound = 0, runNotFound = 0;
+      for (var i = 0; i < days.length; i++) {
+        runTotal += days[i].processed;
+        runFound += days[i].found;
+        runNotFound += days[i].not_found;
+        cumTotal.push(runTotal);
+        cumFound.push(runFound);
+        cumNotFound.push(runNotFound);
+        rateData.push(runTotal > 0 ? Math.round((runFound / runTotal) * 1000) / 10 : 0);
+      }
+
+      if (cumulativeTrendChart) {
+        cumulativeTrendChart.data.labels = labels;
+        cumulativeTrendChart.data.datasets[0].data = cumTotal;
+        cumulativeTrendChart.data.datasets[1].data = cumFound;
+        cumulativeTrendChart.data.datasets[2].data = cumNotFound;
+        cumulativeTrendChart.data.datasets[3].data = rateData;
+        cumulativeTrendChart.update('none');
+      } else {
+        var ctx = document.getElementById('cumulativeTrendChart');
+        if (!ctx) return;
+        cumulativeTrendChart = new Chart(ctx.getContext('2d'), {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Total (สะสม)',
+                data: cumTotal,
+                borderColor: '#00d4ff',
+                backgroundColor: 'rgba(0, 212, 255, 0.05)',
+                fill: true,
+                borderWidth: 3,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                pointBackgroundColor: '#00d4ff',
+                pointBorderColor: '#0a0a0f',
+                pointBorderWidth: 2,
+                tension: 0.4,
+                yAxisID: 'y',
+              },
+              {
+                label: 'Found (สะสม)',
+                data: cumFound,
+                borderColor: '#00ff88',
+                backgroundColor: 'rgba(0, 255, 136, 0.08)',
+                fill: true,
+                borderWidth: 3,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                pointBackgroundColor: '#00ff88',
+                pointBorderColor: '#0a0a0f',
+                pointBorderWidth: 2,
+                tension: 0.4,
+                yAxisID: 'y',
+              },
+              {
+                label: 'Not Found (สะสม)',
+                data: cumNotFound,
+                borderColor: '#ff3366',
+                backgroundColor: 'rgba(255, 51, 102, 0.05)',
+                fill: true,
+                borderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#ff3366',
+                pointBorderColor: '#0a0a0f',
+                pointBorderWidth: 2,
+                tension: 0.4,
+                yAxisID: 'y',
+              },
+              {
+                label: 'Rate %',
+                data: rateData,
+                borderColor: '#fbbf24',
+                backgroundColor: 'transparent',
+                fill: false,
+                borderWidth: 2.5,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#fbbf24',
+                pointBorderColor: '#0a0a0f',
+                pointBorderWidth: 2,
+                borderDash: [6, 3],
+                tension: 0.4,
+                yAxisID: 'y1',
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false,
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: 'rgba(18,18,26,0.95)',
+                titleColor: '#e2e8f0',
+                bodyColor: '#e2e8f0',
+                borderColor: '#1e1e3a',
+                borderWidth: 1,
+                padding: 12,
+                bodyFont: chartDefaults.fontStyle,
+                titleFont: chartDefaults.fontStyle,
+                callbacks: {
+                  label: function(ctx) {
+                    if (ctx.dataset.label === 'Rate %') {
+                      return ctx.dataset.label + ': ' + ctx.parsed.y + '%';
+                    }
+                    return ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString();
+                  }
+                }
+              },
+            },
+            scales: {
+              x: {
+                ticks: { color: '#64748b', font: chartDefaults.fontStyle, maxRotation: 45 },
+                grid: { color: 'rgba(30,30,58,0.3)' }
+              },
+              y: {
+                type: 'linear',
+                display: true,
+                position: 'left',
+                beginAtZero: true,
+                title: { display: true, text: 'จำนวนสะสม', color: '#64748b', font: chartDefaults.fontStyle },
+                ticks: { color: '#64748b', font: chartDefaults.fontStyle },
+                grid: { color: 'rgba(30,30,58,0.3)' },
+              },
+              y1: {
+                type: 'linear',
+                display: true,
+                position: 'right',
+                title: { display: true, text: 'Rate %', color: '#fbbf24', font: chartDefaults.fontStyle },
+                ticks: { color: '#fbbf24', font: chartDefaults.fontStyle, callback: function(v) { return v + '%'; } },
+                grid: { drawOnChartArea: false },
+                min: 0,
+                max: 100,
+              }
+            }
+          }
+        });
+      }
+    }
+
+    function updateDailyChart(data) {
+      var days = buildFullDateRange(data.daily_history, data.today);
+
+      var labels = days.map(function(d) { return d.date.slice(5); });
+      var found = days.map(function(d) { return d.found || 0; });
+      var notFound = days.map(function(d) { return d.not_found || 0; });
+      var errors = days.map(function(d) { return d.errors || 0; });
 
       if (dailyChart) {
         dailyChart.data.labels = labels;
-        dailyChart.data.datasets[0].data = processed;
-        dailyChart.data.datasets[1].data = found;
+        dailyChart.data.datasets[0].data = found;
+        dailyChart.data.datasets[1].data = notFound;
+        dailyChart.data.datasets[2].data = errors;
         dailyChart.update('none');
       } else {
         var ctx = document.getElementById('dailyChart');
@@ -1062,18 +1495,26 @@
             labels: labels,
             datasets: [
               {
-                label: 'Processed',
-                data: processed,
-                backgroundColor: 'rgba(168, 85, 247, 0.6)',
-                borderColor: '#a855f7',
+                label: 'Found',
+                data: found,
+                backgroundColor: 'rgba(0, 255, 136, 0.7)',
+                borderColor: '#00ff88',
                 borderWidth: 1,
                 borderRadius: 4,
               },
               {
-                label: 'Found',
-                data: found,
-                backgroundColor: 'rgba(0, 255, 136, 0.6)',
-                borderColor: '#00ff88',
+                label: 'Not Found',
+                data: notFound,
+                backgroundColor: 'rgba(255, 51, 102, 0.5)',
+                borderColor: '#ff3366',
+                borderWidth: 1,
+                borderRadius: 4,
+              },
+              {
+                label: 'Errors',
+                data: errors,
+                backgroundColor: 'rgba(251, 191, 36, 0.5)',
+                borderColor: '#fbbf24',
                 borderWidth: 1,
                 borderRadius: 4,
               }
@@ -1089,8 +1530,8 @@
               tooltip: chartDefaults.tooltipStyle,
             },
             scales: {
-              x: { ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } },
-              y: { ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } }
+              x: { stacked: true, ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } },
+              y: { stacked: true, ticks: { color: '#64748b', font: chartDefaults.fontStyle }, grid: { color: chartDefaults.gridColor } }
             }
           }
         });
@@ -1405,6 +1846,65 @@
         }
       } catch(e) {
         alert('Reset ล้มเหลว: ' + e.message);
+      }
+    }
+
+    // ============================================================
+    // Manual Session Control — Toggle Button
+    // ============================================================
+    var currentMode = 'auto';
+
+    function toggleSession() {
+      // Toggle: idle/auto → start, running → stop, stopped → start
+      if (currentMode === 'running') {
+        sessionControl('stop');
+      } else {
+        sessionControl('start');
+      }
+    }
+
+    async function sessionControl(action) {
+      try {
+        var res = await fetch('/api/session/' + action, { method: 'POST' });
+        var data = await res.json();
+        if (data.success) {
+          updateModeUI(data.mode, action === 'start' ? 'running' : 'idle');
+          fetchStats();
+        }
+      } catch(e) {
+        console.warn('Session control failed:', e.message);
+      }
+    }
+
+    function updateModeUI(mode, systemStatus) {
+      // ใช้ทั้ง mode (manual flag) และ systemStatus (actual activity) เพื่อแสดงสถานะจริง
+      var actuallyRunning = (systemStatus === 'running') || (mode === 'running' && systemStatus !== 'idle');
+      currentMode = actuallyRunning ? 'running' : mode;
+
+      var btn = document.getElementById('btnToggle');
+      var icon = document.getElementById('toggleIcon');
+      var label = document.getElementById('toggleLabel');
+      var autoBtn = document.getElementById('btnAutoReset');
+
+      if (actuallyRunning || mode === 'running') {
+        // กำลังทำงานจริงๆ → แสดงปุ่ม Stop (สีแดง กระพริบ)
+        btn.className = 'session-toggle state-running px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2';
+        icon.innerHTML = '&#9632;';
+        label.textContent = actuallyRunning ? 'Running...' : 'Starting...';
+        autoBtn.classList.remove('hidden');
+        currentMode = 'running';
+      } else if (mode === 'stopped') {
+        // ถูก stop โดย user → แสดงปุ่ม Start (สีเทา)
+        btn.className = 'session-toggle state-stopped px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2';
+        icon.innerHTML = '&#9654;';
+        label.textContent = 'Stopped';
+        autoBtn.classList.remove('hidden');
+      } else {
+        // Auto mode ปกติ → แสดงปุ่ม Start (สีเขียว พร้อมกด)
+        btn.className = 'session-toggle state-idle px-4 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-2';
+        icon.innerHTML = '&#9654;';
+        label.textContent = 'Start';
+        autoBtn.classList.add('hidden');
       }
     }
 

@@ -25,6 +25,9 @@ Thumbs.db
 api-data/
 n8n-data/
 
+# Backups
+backups/
+
 # Uploads
 uploads/
 *.xlsx
