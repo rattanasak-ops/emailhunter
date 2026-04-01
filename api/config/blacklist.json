@@ -1,0 +1,59 @@
+{
+  "_comment": "Email domain blacklist — แยกเป็นหมวดเพื่อ maintain ง่าย",
+  "directory": [
+    "connectbizs.com", "longdo.com", "yellowpages.co.th", "trustonline.co.th",
+    "thaidbs.com", "thaibizdir.com", "registered.in.th", "dataforthai.com",
+    "smeregister.com", "infoquest.co.th", "checkraka.com", "creden.co"
+  ],
+  "job_boards": [
+    "jobthai.com", "jobsdb.com", "jobbkk.com", "indeed.com", "linkedin.com",
+    "thaijobsgov.com", "nationejobs.com", "jobth.com",
+    "trustmail.jobthai", "getlinks.com", "prtr.com", "adecco.co.th",
+    "manpower.co.th", "randstad.co.th", "roberthalf.co.th"
+  ],
+  "social_general": [
+    "facebook.com", "google.com", "wikipedia.org",
+    "pantip.com", "sanook.com", "kapook.com",
+    "sentry.io", "wixpress.com", "placeholder.com", "example.com"
+  ],
+  "banks": [
+    "kasikornbank.com", "kbank.com", "scb.co.th", "bangkokbank.com",
+    "ktb.co.th", "krungsri.com", "tmb.co.th", "ttbbank.com",
+    "gsb.or.th", "baac.or.th", "ghbank.co.th", "tisco.co.th",
+    "lhbank.co.th", "cimbthai.com", "uob.co.th", "thanachartbank.co.th"
+  ],
+  "big_retail_corporate": [
+    "siammakro.co.th", "makro.co.th", "cpall.co.th", "7eleven.co.th",
+    "bigc.co.th", "lotuss.com", "central.co.th", "homepro.co.th",
+    "doikham.co.th", "teleinfomedia.co.th",
+    "centralpattana.co.th", "scg.com", "scgchemicals.com",
+    "ttwplc.com", "oic.or.th", "sam.or.th", "thnic.co.th",
+    "lmwn.com", "systems.co.th"
+  ],
+  "hospitals": [
+    "thainakarin.co.th", "bumrungrad.com", "bdms.co.th"
+  ],
+  "tech_giants": [
+    "microsoft.com", "apple.com", "support.com"
+  ],
+  "false_positives": [
+    "tencent.co.th", "roblox.com", "sermsukplc.com", "thespinoff.co.nz",
+    "kex-express.com", "autohome.com.cn", "btnet.com.tw", "aui.ma",
+    "record-a.autohome.com.cn", "ponpe.com", "smjip.com",
+    "atta.or.th", "warin.co.th", "menatransport.co.th",
+    "btacia.co.th", "uaeconsultant.com", "zainoifb.com",
+    "ideal1world.com", "168studioandsupply.com", "ie.co.th",
+    "asianet.co.th", "sgb.co.th",
+    "zhihu.com", "pizzaexpress.cn",
+    "renthub.in.th", "hrcenter.co.th", "sritranggroup.com",
+    "amjakastudio.co.th", "hinothailand.com", "optasiacapital.com",
+    "smooth-e.com", "reddoorsamsen.com", "accellence.co.th",
+    "mission-t.co.th", "vichai.group", "degree.plus",
+    "baanpattayagroup.com", "idinarchitects.com",
+    "worldpump-wpm.com", "jwtech.co.th", "xplus.co.th",
+    "ahlsell.se", "startuptalky.com", "dezpax.com",
+    "pronalityacademy.com", "thaiinternships.com",
+    "lifestyletech.co.th", "jorakay.co.th", "prompt1992.com",
+    "gfreight.co.th", "qbic.co.th", "yellbkk.com"
+  ]
+}

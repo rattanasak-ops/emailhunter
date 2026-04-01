@@ -128,7 +128,7 @@ HEALTH_OK=true
 check_container "emailhunter-redis" 30 || HEALTH_OK=false
 check_container "emailhunter-api" 30 || HEALTH_OK=false
 check_service "SearXNG (port 8888)" "http://localhost:8888" 60 || HEALTH_OK=false
-check_service "n8n (port 5679)" "http://localhost:5679/healthz" 60 || HEALTH_OK=false
+check_service "n8n (port 5680)" "http://localhost:5680/healthz" 60 || HEALTH_OK=false
 check_service "Dashboard (port 8890)" "http://localhost:8890" 30 || HEALTH_OK=false
 
 echo ""
@@ -141,7 +141,7 @@ else
 fi
 echo -e "${CYAN}══════════════════════════════════════════${NC}"
 echo ""
-echo -e "${GREEN}  n8n:       http://localhost:5679${NC}"
+echo -e "${GREEN}  n8n:       http://localhost:5680${NC}"
 echo -e "${GREEN}  SearXNG:   http://localhost:8888${NC}"
 echo -e "${GREEN}  Dashboard: http://localhost:8890${NC}"
 echo ""
