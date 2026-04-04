@@ -166,6 +166,30 @@ function buildQuery(companyName, excludePattern) {
   };
 }
 
+// Smart retry: เลือก pattern จาก tier ที่กำหนด (สำหรับ retry ครั้งที่ 2+)
+function buildQueryFromTier(companyName, allowedTiers, excludePattern) {
+  const candidates = QUERY_PATTERNS.filter(p => allowedTiers.includes(p.tier));
+  if (candidates.length === 0) return buildQuery(companyName, excludePattern);
+
+  const totalWeight = candidates.reduce((sum, p) => sum + p.weight, 0);
+  let selected = candidates[0];
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let rand = Math.random() * totalWeight;
+    for (const p of candidates) {
+      rand -= p.weight;
+      if (rand <= 0) { selected = p; break; }
+    }
+    if (!excludePattern || selected.pattern !== excludePattern) break;
+  }
+
+  return {
+    query: selected.pattern.replace(/\{company\}/g, companyName),
+    pattern: selected.pattern,
+    tier: selected.tier,
+  };
+}
+
 // ─── SearXNG Search ──────────────────────────────────────────
 
 function searchSearXNG(query, engines) {
@@ -312,6 +336,7 @@ module.exports = {
   GOOGLE_CSE_LIMIT_PER_KEY,
   // Query
   buildQuery,
+  buildQueryFromTier,
   patternStats,
   trackPatternResult,
   // Backoff state

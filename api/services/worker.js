@@ -40,13 +40,17 @@ async function processOneCompany() {
   if (session.manualMode !== 'running' || !session.workerRunning) return false;
 
   const company = db.prepare(
-    `SELECT id, company_name, retry_count, last_pattern_used FROM companies
+    `SELECT id, company_name, retry_count, last_pattern_used, last_engines_used, rejection_reason FROM companies
      WHERE status IN ('pending','retry') ORDER BY CASE WHEN status='retry' THEN 0 ELSE 1 END, id ASC LIMIT 1`
   ).get();
   if (!company) { log('Worker: no pending companies'); return false; }
 
   try {
-    const queryInfo = search.buildQuery(company.company_name, company.last_pattern_used);
+    // Smart retry: ถ้า retry ครั้งที่ 2+ → บังคับใช้ directory/social patterns (tier 5-6)
+    const forceDirectoryTier = company.retry_count >= 1 && company.rejection_reason !== 'engine_blocked';
+    const queryInfo = forceDirectoryTier
+      ? search.buildQueryFromTier(company.company_name, [5, 6], company.last_pattern_used)
+      : search.buildQuery(company.company_name, company.last_pattern_used);
     const engines = search.pickEnginesForQuery();
     log(`Worker: "${company.company_name}" [tier ${queryInfo.tier}] engines=${engines}`);
 
@@ -78,7 +82,23 @@ async function processOneCompany() {
       } catch { /* skip */ }
     }
 
-    const filtered = filterValidEmails(allEmails, company.company_name, source);
+    let filtered = filterValidEmails(allEmails, company.company_name, source);
+
+    // Fallback 4: ถ้า search เจอ email แต่ถูก filter หมด → ลอง crawl homepage ของ domain ที่เจอ
+    if (!filtered.best && allEmails.length > 0 && searchResult.results?.length > 0) {
+      try {
+        const crawlResult = await crawlForEmails(searchResult.results, company.company_name, 2); // force deep crawl
+        if (crawlResult.emails.length > 0) {
+          const crawlFiltered = filterValidEmails(crawlResult.emails, company.company_name, crawlResult.source);
+          if (crawlFiltered.best) {
+            filtered = crawlFiltered;
+            source = crawlResult.source;
+            log(`Worker: all_filtered recovery — found ${crawlFiltered.best} via ${source}`);
+          }
+        }
+      } catch { /* skip */ }
+    }
+
     const now = nowISOStr();
     const today = todayStr();
     ensureDailyStats(today);
