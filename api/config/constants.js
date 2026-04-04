@@ -59,7 +59,7 @@ const ENGINE_TIERS = {
   tertiary: ['qwant', 'mojeek'],
 };
 
-const ENGINE_COOLDOWN_MS = 120000; // 2 minutes between uses of same engine
+const ENGINE_COOLDOWN_MS = 300000; // 5 minutes — ให้แต่ละ engine พักนานขึ้น ลดโอกาสถูก block
 
 // ─── Anti-Blocking Thresholds ────────────────────────────────
 const ALL_DOWN_ALERT_INTERVAL = 15 * 60 * 1000; // 15 min between alerts

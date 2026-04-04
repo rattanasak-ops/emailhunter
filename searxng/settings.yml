@@ -12,29 +12,74 @@ search:
 
 server:
   secret_key: "${SEARXNG_SECRET}"
-  limiter: false
+  limiter: true
   method: GET
   bind_address: "0.0.0.0"
   port: 8080
 
 engines:
-  - name: google
-    engine: google
-    shortcut: g
+  - name: startpage
+    engine: startpage
+    shortcut: sp
     disabled: false
+    timeout: 20
 
   - name: bing
     engine: bing
     shortcut: b
     disabled: false
+    timeout: 15
+    send_accept_language_header: true
+
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    timeout: 15
+    send_accept_language_header: true
 
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     disabled: false
+    timeout: 15
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+    timeout: 15
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    disabled: false
+    timeout: 15
+    send_accept_language_header: true
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+    timeout: 15
+
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
+    disabled: false
+    timeout: 20
 
 redis:
   url: "redis://emailhunter-redis:6379/0"
 
 outgoing:
-  request_timeout: 10
+  request_timeout: 25
+  useragent_suffix: ""
+  pool_connections: 5
+  pool_maxsize: 10
+  enable_http2: true
+  max_request_timeout: 30
+  # Direct — ไม่ใช้ Tor (IP ถูก block แล้ว)
+  proxies:
+    "all://":
+      - ""

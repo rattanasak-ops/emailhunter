@@ -97,7 +97,8 @@ function pickEnginesForQuery() {
   }));
 
   const available = scored.filter(e => e.cooldownOk).sort((a, b) => b.idleMs - a.idleMs);
-  const count = Math.min(healthy.length >= 3 ? 3 : 2, healthy.length);
+  // ใช้ 2 engines ต่อ query (ลดจาก 3) → กระจาย load ไม่ให้ engine ไหนถูกยิงถี่เกิน
+  const count = Math.min(2, healthy.length);
   const picked = [];
 
   for (const tier of [ENGINE_TIERS.primary, ENGINE_TIERS.secondary, ENGINE_TIERS.tertiary]) {

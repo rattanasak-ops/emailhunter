@@ -103,12 +103,13 @@ function getAdaptiveDelay(queriesThisPhase) {
   // Phase warm-up: 5 queries แรกของรอบ delay x1.3 (รวม slow start เข้ามา)
   const warmupMultiplier = queriesThisPhase < 5 ? 1.3 : 1.0;
 
+  // Tor proxy = IP เดียว → ต้อง delay สูงกว่าเพื่อไม่ให้ถูก block
   if (USING_PROXY) {
-    abState.adaptiveDelayMean = errRate > 0.5 ? 20 : errRate > 0.3 ? 14 : errRate > 0.15 ? 10 : 7;
-    return gaussianDelay(abState.adaptiveDelayMean, 3, 4, 25) * warmupMultiplier;
+    abState.adaptiveDelayMean = errRate > 0.5 ? 40 : errRate > 0.3 ? 25 : errRate > 0.15 ? 18 : 12;
+    return gaussianDelay(abState.adaptiveDelayMean, 4, 8, 50) * warmupMultiplier;
   }
-  abState.adaptiveDelayMean = errRate > 0.5 ? 30 : errRate > 0.3 ? 22 : errRate > 0.15 ? 15 : 10;
-  return gaussianDelay(abState.adaptiveDelayMean, 4, 6, 40) * warmupMultiplier;
+  abState.adaptiveDelayMean = errRate > 0.5 ? 50 : errRate > 0.3 ? 35 : errRate > 0.15 ? 22 : 15;
+  return gaussianDelay(abState.adaptiveDelayMean, 5, 10, 60) * warmupMultiplier;
 }
 
 function gaussianDelay(mean, stddev, min, max) {
@@ -158,7 +159,8 @@ function getDailyLimit() {
     if (stats && stats.processed >= 50) {
       const foundRate = stats.found / stats.processed;
       if (foundRate > 0.50) { abState.DAILY_LIMIT = Math.max(abState.DAILY_LIMIT, randomBetween(3000, 4000)); abState.dailyLimitTier = 'high'; }
-      else if (foundRate < 0.20) { abState.DAILY_LIMIT = Math.min(abState.DAILY_LIMIT, randomBetween(1200, 1800)); abState.dailyLimitTier = 'low'; }
+      else if (foundRate < 0.10) { abState.DAILY_LIMIT = Math.min(abState.DAILY_LIMIT, randomBetween(1800, 2200)); abState.dailyLimitTier = 'low'; }
+      // found rate 10-50% = ปกติ ไม่ปรับ (เดิมลดที่ <20% ทำให้ limit ต่ำเกินไป)
       else abState.dailyLimitTier = 'normal';
     }
   } catch { /* ignore */ }
