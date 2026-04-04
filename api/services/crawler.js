@@ -145,33 +145,91 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
 function guessDomainsFromCompany(companyName) {
   const domains = [];
   const english = extractEnglishParts(companyName);
+
   for (const part of english) {
     if (part.length >= 3) {
       domains.push(`${part}.co.th`);
       domains.push(`${part}.com`);
     }
   }
+
+  // Concatenated: "Siam Cement" → "siamcement.co.th"
   if (english.length >= 2) {
     const concat = english.join('');
     if (concat.length >= 4 && concat.length <= 30) {
       domains.push(`${concat}.co.th`);
       domains.push(`${concat}.com`);
     }
+    // Hyphenated: "Thai Oil" → "thai-oil.co.th"
+    const hyphen = english.join('-');
+    domains.push(`${hyphen}.co.th`);
+    domains.push(`${hyphen}.com`);
   }
+
+  // Initials: "Advanced Info Service" → "ais.co.th"
   const words = companyName.replace(THAI_COMPANY_SUFFIXES, '').trim().split(/\s+/).filter(w => w.length > 0);
   const initials = words.map(w => { const m = w.match(/^[a-zA-Z]/); return m ? m[0].toLowerCase() : ''; }).filter(Boolean).join('');
   if (initials.length >= 2 && initials.length <= 6) {
     domains.push(`${initials}.co.th`);
     domains.push(`${initials}.com`);
   }
+
+  // First word only: "Toyota Motor" → "toyota.co.th"
+  if (english.length > 0 && english[0].length >= 4) {
+    domains.push(`${english[0]}.co.th`);
+    domains.push(`${english[0]}.com`);
+  }
+
   return [...new Set(domains)];
 }
 
 async function verifyMxRecord(domain) {
   try {
     const records = await resolveMx(domain);
-    return records && records.length > 0;
-  } catch { return false; }
+    return records && records.length > 0 ? records : null;
+  } catch { return null; }
+}
+
+// SMTP RCPT TO verification — ตรวจว่า email มีจริงหรือไม่
+const net = require('net');
+function verifySmtpEmail(email, mxHost, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(25, mxHost);
+    let step = 0;
+    let resolved = false;
+
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.on('timeout', () => finish(false));
+    socket.on('error', () => finish(false));
+
+    socket.on('data', (data) => {
+      const response = data.toString();
+      if (step === 0 && response.startsWith('220')) {
+        socket.write('EHLO emailhunter.local\r\n');
+        step = 1;
+      } else if (step === 1 && response.startsWith('250')) {
+        socket.write(`MAIL FROM:<verify@emailhunter.local>\r\n`);
+        step = 2;
+      } else if (step === 2 && response.startsWith('250')) {
+        socket.write(`RCPT TO:<${email}>\r\n`);
+        step = 3;
+      } else if (step === 3) {
+        // 250 = email exists, 550/551/553 = not exists
+        const exists = response.startsWith('250');
+        socket.write('QUIT\r\n');
+        finish(exists);
+      } else {
+        finish(false);
+      }
+    });
+  });
 }
 
 async function guessEmailByMX(companyName) {
@@ -180,12 +238,33 @@ async function guessEmailByMX(companyName) {
 
   for (const domain of candidateDomains.slice(0, 8)) {
     try {
-      const hasMx = await verifyMxRecord(domain);
-      if (hasMx) {
-        log(`Crawler: MX verified — ${domain} accepts email`);
-        const emails = EMAIL_PREFIXES.map(prefix => `${prefix}@${domain}`);
-        return { emails, source: 'mx-guess', domain };
+      const mxRecords = await verifyMxRecord(domain);
+      if (!mxRecords) continue;
+
+      log(`Crawler: MX verified — ${domain} accepts email`);
+      const mxHost = mxRecords.sort((a, b) => a.priority - b.priority)[0].exchange;
+
+      // SMTP verify: ตรวจว่า info@ หรือ contact@ มีจริงไหม
+      const verifiedEmails = [];
+      for (const prefix of EMAIL_PREFIXES.slice(0, 3)) { // ลองแค่ info, contact, sales
+        const testEmail = `${prefix}@${domain}`;
+        try {
+          const exists = await verifySmtpEmail(testEmail, mxHost);
+          if (exists) {
+            verifiedEmails.push(testEmail);
+            log(`Crawler: SMTP verified — ${testEmail} EXISTS`);
+            break; // เจอ 1 ตัวพอ
+          }
+        } catch { /* skip */ }
       }
+
+      if (verifiedEmails.length > 0) {
+        return { emails: verifiedEmails, source: 'smtp-verified', domain };
+      }
+
+      // Fallback: ถ้า SMTP verify ไม่ได้ (port 25 blocked) → ใช้ MX guess เดิม
+      const emails = EMAIL_PREFIXES.map(prefix => `${prefix}@${domain}`);
+      return { emails, source: 'mx-guess', domain };
     } catch { /* skip */ }
   }
   return { emails: [], source: 'mx-guess', domain: null };
