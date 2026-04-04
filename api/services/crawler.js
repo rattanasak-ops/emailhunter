@@ -39,11 +39,37 @@ function extractEmails(results) {
 
 function extractEmailsFromHtml(html) {
   if (!html) return [];
+  const allFound = new Set();
+
+  // 1. Standard regex
   const found = html.match(EMAIL_REGEX) || [];
+  found.forEach(e => allFound.add(e.toLowerCase()));
+
+  // 2. mailto: links — มักมี email ที่ regex พลาด
+  const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+  let match;
+  while ((match = mailtoRegex.exec(html)) !== null) {
+    allFound.add(match[1].toLowerCase());
+  }
+
+  // 3. Obfuscated emails: [at] (at) {at} แทน @
+  const obfuscatedRegex = /([a-zA-Z0-9._%+-]+)\s*[\[\(\{]\s*(?:at|AT)\s*[\]\)\}]\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
+  while ((match = obfuscatedRegex.exec(html)) !== null) {
+    allFound.add(`${match[1]}@${match[2]}`.toLowerCase());
+  }
+
+  // 4. HTML entity obfuscation: &#64; = @
+  const decodedHtml = html.replace(/&#64;/g, '@').replace(/&#x40;/g, '@');
+  if (decodedHtml !== html) {
+    const decoded = decodedHtml.match(EMAIL_REGEX) || [];
+    decoded.forEach(e => allFound.add(e.toLowerCase()));
+  }
+
+  // Filter junk
   const junkPrefixes = ['noreply', 'no-reply', 'example', 'test', 'user', 'webmaster', 'postmaster', 'mailer-daemon', 'abuse', 'spam'];
   const junkDomains = ['sentry.', 'wixpress.', 'placeholder.', 'example.', 'test.'];
   const junkExts = ['.png', '.jpg', '.gif', '.svg', '.webp', '.css', '.js'];
-  return [...new Set(found.map(e => e.toLowerCase()))].filter(e => {
+  return [...allFound].filter(e => {
     const [local, domain] = e.split('@');
     if (!domain) return false;
     if (junkPrefixes.some(p => local.startsWith(p))) return false;
@@ -121,6 +147,20 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
       const baseUrl = `${urlObj.protocol}//${urlObj.hostname}`;
       if (!triedDomains.has(urlObj.hostname)) {
         triedDomains.add(urlObj.hostname);
+
+        // Step 2a: Crawl homepage — email มักอยู่ใน footer
+        try {
+          const homeHtml = await fetchPage(baseUrl + '/');
+          if (homeHtml.length > 1000) {
+            const homeEmails = extractEmailsFromHtml(homeHtml);
+            if (homeEmails.length > 0) {
+              log(`Crawler: found ${homeEmails.length} emails from ${baseUrl}/ (homepage)`);
+              return { emails: homeEmails, source: 'website' };
+            }
+          }
+        } catch { /* skip */ }
+
+        // Step 2b: Contact pages
         for (const contactPath of CONTACT_PATHS) {
           try {
             const contactHtml = await fetchPage(baseUrl + contactPath);
