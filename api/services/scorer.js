@@ -155,39 +155,46 @@ function scoreEmail(email, companyName, source = 'search') {
     return 35 + sourceBonus;
   }
 
-  // Tier D: Generic providers (gmail, hotmail) — ลด score เพราะมักเป็น junk
+  // Tier D: Generic providers (gmail, hotmail)
+  // SME ไทยใช้ gmail เยอะ → ให้ผ่านถ้ามี company ref
   if (isGenericProvider(email)) {
-    if (isHrEmail) return 10; // HR gmail = แทบไม่มีค่า
+    if (isHrEmail) return 10;
     const englishParts = extractEnglishParts(companyName);
     const hasCompanyRef = englishParts.some(ep => ep.length >= 3 && localPart.includes(ep));
-    if (hasCompanyRef && isBusinessPrefix) return 45;
-    if (hasCompanyRef) return 38;
-    if (isBusinessPrefix) return 30; // info@gmail.com ไม่ดี ต้องมี company ref
-    return 15; // random gmail = ไม่ผ่าน MIN_SCORE 35
+    if (hasCompanyRef && isBusinessPrefix) return 50 + sourceBonus; // thaioil.info@gmail → ดี
+    if (hasCompanyRef) return 40 + sourceBonus;                     // thaioil@gmail → OK
+    if (isBusinessPrefix) return 30 + sourceBonus;                  // info@gmail → พอได้
+    return 18;                                                      // random@gmail → ไม่ผ่าน
   }
 
   // Tier E: .com/.net/.org without company match
   if (domain.endsWith('.com') || domain.endsWith('.net') || domain.endsWith('.org')) {
     if (isBusinessPrefix) return 35 + sourceBonus;
-    if (isPersonalEmail) return 15; // random personal .com = ไม่ผ่าน
+    if (isPersonalEmail) return 20;
     return 25 + sourceBonus;
   }
 
-  return 15; // unknown domain = ไม่ผ่าน MIN_SCORE
+  return 18;
 }
 
 // ─── Filter & Rank ───────────────────────────────────────────
 
-const MIN_SCORE = 35; // เพิ่มจาก 20 → 35 เพื่อลด junk email
+// MIN_SCORE แยกตาม source — email จาก website น่าเชื่อถือกว่า search snippet
+function getMinScore(source) {
+  if (source === 'website' || source === 'contact-page') return 20;  // เจอบนเว็บบริษัท → เชื่อถือได้
+  if (source === 'mx-guess') return 30;                               // guess → ต้องมั่นใจหน่อย
+  return 25;                                                          // search snippet → กลาง
+}
 
 function filterValidEmails(emails, companyName, source = 'search') {
   if (!emails) return { best: null, all: [], confidence: 'none' };
   const list = Array.isArray(emails) ? emails : [emails];
+  const minScore = getMinScore(source);
 
   const scored = list
     .filter(e => e && typeof e === 'string')
     .map(e => ({ email: e, score: scoreEmail(e, companyName, source) }))
-    .filter(x => x.score >= MIN_SCORE)
+    .filter(x => x.score >= minScore)
     .sort((a, b) => b.score - a.score);
 
   if (scored.length === 0) return { best: null, all: [], confidence: 'none' };

@@ -100,8 +100,14 @@ async function processOneCompany() {
       else rejectionReason = REJECTION_REASONS.ALL_FILTERED;
     }
 
+    // เก็บทั้ง raw emails (ก่อน filter) และ filtered emails
+    // ถ้า all_filtered → เก็บ raw emails ไว้เพื่อ debug + retry
+    const allEmailsStr = filtered.all.length > 0
+      ? filtered.all.join(', ')
+      : (allEmails.length > 0 ? allEmails.join(', ') : null);
+
     db.prepare(`UPDATE companies SET email=?, all_emails=?, source_url=?, status=?, rejection_reason=?, last_pattern_used=?, last_engines_used=?, processed_date=?, updated_at=? WHERE id=?`)
-      .run(email, filtered.all.join(', ') || null, sourceUrl, status, rejectionReason, queryInfo.pattern, engines, now, now, company.id);
+      .run(email, allEmailsStr, sourceUrl, status, rejectionReason, queryInfo.pattern, engines, now, now, company.id);
 
     search.trackPatternResult(queryInfo.pattern, status === 'found');
     ab.abState.hourlyResults.push({ ts: Date.now(), found: status === 'found' });

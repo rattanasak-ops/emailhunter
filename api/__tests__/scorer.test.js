@@ -125,14 +125,19 @@ describe('scoreEmail', () => {
     expect(score).toBeGreaterThanOrEqual(50);
   });
 
-  test('random gmail = low score (below MIN_SCORE)', () => {
+  test('random gmail = low score (below MIN_SCORE 25)', () => {
     const score = scoreEmail('random123@gmail.com', 'บริษัท ไทยออยล์');
-    expect(score).toBeLessThan(35);
+    expect(score).toBeLessThan(25);
   });
 
-  test('gmail with company ref = acceptable', () => {
+  test('gmail with company ref = acceptable (>= 25)', () => {
     const score = scoreEmail('thaioil.sales@gmail.com', 'Thai Oil Company');
-    expect(score).toBeGreaterThanOrEqual(35);
+    expect(score).toBeGreaterThanOrEqual(25);
+  });
+
+  test('gmail info + company ref = good score', () => {
+    const score = scoreEmail('thaioil.info@gmail.com', 'Thai Oil Company');
+    expect(score).toBeGreaterThanOrEqual(40);
   });
 
   test('HR email = penalized', () => {
