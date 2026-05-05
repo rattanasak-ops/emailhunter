@@ -5,7 +5,8 @@
 # ใช้: source scripts/notify.sh แล้วเรียก send_alert "title" "message"
 # ─────────────────────────────────────────────────────────────
 
-COMPOSE_DIR="/Users/rattanasak/Documents/Cursor Project/EmailHunter"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$COMPOSE_DIR/.env"
 
 # โหลด .env
@@ -19,7 +20,7 @@ send_lark() {
   local BODY="$2"
   local COLOR="$3"  # green, red, yellow
 
-  if [ -z "$LARK_WEBHOOK_URL" ] || [ "$LARK_WEBHOOK_URL" = "__REPLACE_ME__" ]; then
+  if [ -z "${LARK_WEBHOOK_URL:-}" ] || [ "$LARK_WEBHOOK_URL" = "__REPLACE_ME__" ]; then
     return 1
   fi
 
@@ -32,7 +33,7 @@ send_lark() {
   esac
 
   # ส่งผ่าน Lark Interactive Message Card
-  curl -s -X POST "$LARK_WEBHOOK_URL" \
+  curl -s --max-time 10 -X POST "$LARK_WEBHOOK_URL" \
     -H "Content-Type: application/json" \
     -d "{
       \"msg_type\": \"interactive\",
@@ -67,11 +68,11 @@ send_lark() {
 send_line_notify() {
   local MSG="$1"
 
-  if [ -z "$LINE_NOTIFY_TOKEN" ] || [ "$LINE_NOTIFY_TOKEN" = "__REPLACE_ME__" ]; then
+  if [ -z "${LINE_NOTIFY_TOKEN:-}" ] || [ "$LINE_NOTIFY_TOKEN" = "__REPLACE_ME__" ]; then
     return 1
   fi
 
-  curl -s -X POST https://notify-api.line.me/api/notify \
+  curl -s --max-time 10 -X POST https://notify-api.line.me/api/notify \
     -H "Authorization: Bearer $LINE_NOTIFY_TOKEN" \
     -d "message=$MSG" > /dev/null 2>&1
 }

@@ -48,7 +48,9 @@ else
     fi
     N8N_KEY=$(openssl rand -hex 32)
     SEARX_SECRET=$(openssl rand -hex 32)
+    API_KEY=$(openssl rand -hex 24)
     sed \
+        -e "s|API_KEY=__REPLACE_ME__|API_KEY=${API_KEY}|" \
         -e "s|N8N_ENCRYPTION_KEY=__REPLACE_ME__|N8N_ENCRYPTION_KEY=${N8N_KEY}|" \
         -e "s|SEARXNG_SECRET=__REPLACE_ME__|SEARXNG_SECRET=${SEARX_SECRET}|" \
         "$PROJECT_DIR/.env.template" > "$PROJECT_DIR/.env"

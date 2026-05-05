@@ -2,7 +2,7 @@
 
 ## ระบบนี้ทำอะไร
 
-EmailHunter เป็นระบบค้นหา email บริษัทอัตโนมัติ รับรายชื่อบริษัท 300,000 รายการจาก Google Sheet ค้นหาผ่าน SearXNG (Google/Bing/DuckDuckGo) ดึง email ด้วย regex กรอง junk email ออก แล้วบันทึกผลกลับ Google Sheet พร้อม Dashboard แสดงสถิติ real-time
+EmailHunter เป็นระบบค้นหา email บริษัทอัตโนมัติ รับรายชื่อบริษัทจำนวนมาก ค้นหาผ่าน SearXNG/Google CSE, crawl หน้าเว็บ, กรอง junk email แล้วบันทึกผลลงฐานข้อมูล API พร้อม Dashboard แสดงสถิติ real-time
 
 ---
 
@@ -13,11 +13,11 @@ EmailHunter เป็นระบบค้นหา email บริษัทอ�
 │                    Server (Ubuntu)                     │
 │                                                        │
 │  ┌─────────────── EmailHunter Network ──────────────┐ │
-│  │              (172.21.0.0/16)                      │ │
+│  │              (172.25.0.0/16)                      │ │
 │  │                                                    │ │
 │  │  ┌──────────┐    ┌──────────┐    ┌────────────┐  │ │
 │  │  │  SearXNG  │◄───│   n8n    │───►│  Google     │  │ │
-│  │  │  :8888    │    │  :5679   │    │  Sheets API │  │ │
+│  │  │  :8888    │    │  :5680   │    │  Sheets API │  │ │
 │  │  └────┬─────┘    └────┬─────┘    └────────────┘  │ │
 │  │       │               │                            │ │
 │  │  ┌────┴─────┐    ┌────┴─────┐                     │ │
@@ -39,8 +39,9 @@ EmailHunter เป็นระบบค้นหา email บริษัทอ�
 
 | Service | Port | หมายเหตุ |
 |---------|------|----------|
-| n8n | 5679 | OpenClaw ใช้ 5678 |
+| n8n | 5680 | OpenClaw ใช้ 5678 |
 | SearXNG | 8888 | - |
+| API | internal 3456 | Dashboard เรียกผ่าน Docker network |
 | Dashboard | 8890 | OpenClaw ใช้ 8080 |
 | Redis | internal | ไม่ expose ออกนอก |
 
@@ -111,7 +112,7 @@ bash scripts/test.sh
 
 ### 1. เปิด n8n
 
-เข้า `http://YOUR_SERVER_IP:5679` ในเบราว์เซอร์
+เข้า `http://YOUR_SERVER_IP:5680` ในเบราว์เซอร์
 
 ### 2. สร้าง Google Sheets Credential
 
@@ -196,7 +197,10 @@ docker stats --no-stream | grep emailhunter
 curl "http://localhost:8888/search?q=test&format=json"
 
 # ทดสอบ n8n
-curl http://localhost:5679/healthz
+curl http://localhost:5680/healthz
+
+# ทดสอบ API health จาก container
+docker exec emailhunter-api wget -qO- http://127.0.0.1:3456/api/health
 
 # สำรองข้อมูล
 bash scripts/backup.sh
@@ -246,4 +250,4 @@ bash deploy.sh
 
 ### 6. Port ชนกับ OpenClaw
 - **สาเหตุ**: ไม่ควรเกิดถ้าใช้ docker-compose.yml ตามที่กำหนด
-- **แก้ไข**: ตรวจ `ss -tlnp | grep -E '5679|8888|8890'`
+- **แก้ไข**: ตรวจ `ss -tlnp | grep -E '5680|8888|8890'`

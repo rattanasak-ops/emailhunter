@@ -7,7 +7,8 @@
 #   10 9 * * * /path/to/daily-backup.sh post-session
 # ─────────────────────────────────────────────────────────────
 
-COMPOSE_DIR="/Users/rattanasak/Documents/Cursor Project/EmailHunter"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="$COMPOSE_DIR/backups"
 LOG_FILE="$COMPOSE_DIR/logs/backup.log"
 CONTAINER="emailhunter-api"

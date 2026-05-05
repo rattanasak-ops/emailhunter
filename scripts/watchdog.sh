@@ -5,7 +5,8 @@
 # ติดตั้ง: crontab -e → */5 * * * * /path/to/watchdog.sh
 # ─────────────────────────────────────────────────────────────
 
-COMPOSE_DIR="/Users/rattanasak/Documents/Cursor Project/EmailHunter"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_FILE="$COMPOSE_DIR/logs/watchdog.log"
 
 # สร้าง log directory
@@ -40,10 +41,11 @@ DOWN_CONTAINERS=""
 
 for CONTAINER in $REQUIRED_CONTAINERS; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)
+  HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null)
 
-  if [ "$STATUS" != "running" ]; then
+  if [ "$STATUS" != "running" ] || [ "$HEALTH" = "unhealthy" ]; then
     DOWN_CONTAINERS="$DOWN_CONTAINERS $CONTAINER"
-    log "DETECTED: $CONTAINER is $STATUS (not running)"
+    log "DETECTED: $CONTAINER status=$STATUS health=$HEALTH"
   fi
 done
 
@@ -67,7 +69,8 @@ if [ -n "$DOWN_CONTAINERS" ]; then
   STILL_DOWN=""
   for CONTAINER in $DOWN_CONTAINERS; do
     STATUS=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)
-    if [ "$STATUS" != "running" ]; then
+    HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null)
+    if [ "$STATUS" != "running" ] || [ "$HEALTH" = "unhealthy" ]; then
       STILL_DOWN="$STILL_DOWN $CONTAINER"
     fi
   done

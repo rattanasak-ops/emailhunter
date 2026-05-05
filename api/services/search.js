@@ -29,6 +29,13 @@ let allDownLastAlertAt = 0;
 let rampUpPhase = false;
 let rampUpQueriesDone = 0;
 
+function makeSearchBackoffError(message, code = 'SEARCH_BACKOFF', backoffSec = 300) {
+  const err = new Error(message);
+  err.code = code;
+  err.backoffSec = backoffSec;
+  return err;
+}
+
 function getAllDownBackoff() {
   const idx = Math.min(allDownConsecutive - 1, ALL_DOWN_BACKOFF_STEPS.length - 1);
   return ALL_DOWN_BACKOFF_STEPS[Math.max(0, idx)];
@@ -86,8 +93,9 @@ function pickEnginesForQuery() {
   const now = Date.now();
 
   if (healthy.length === 0) {
-    log('WARNING: All engines unhealthy — fallback to bing,duckduckgo');
-    return 'bing,duckduckgo';
+    const sec = getAllDownBackoff();
+    log(`WARNING: All engines unhealthy — pausing search for ${sec}s`);
+    throw makeSearchBackoffError('all engines unhealthy', 'ALL_ENGINES_DOWN', sec);
   }
 
   const scored = healthy.map(eng => ({
@@ -207,8 +215,7 @@ function searchSearXNG(query, engines) {
           const uniqueResponded = [...new Set(respondedEngines)];
 
           for (const [engName] of (parsed.unresponsive_engines || [])) {
-            const eh = engineHealth[engName];
-            if (eh) { eh.failCount++; eh.healthy = false; eh.lastCheck = Date.now(); }
+            markEngineUnhealthy(engName);
           }
           for (const eng of uniqueResponded) {
             const eh = engineHealth[eng];
@@ -230,6 +237,7 @@ function searchSearXNG(query, engines) {
                 'ระบบจะพักแล้วลองใหม่อัตโนมัติ',
               ].join('\n'), 'red');
             }
+            return reject(makeSearchBackoffError(`all engines down: ${reasons}`, 'ALL_ENGINES_DOWN', backoffSec));
           }
 
           if (uniqueResponded.length > 0 && allDownConsecutive > 0) {
@@ -342,7 +350,15 @@ module.exports = {
   // Backoff state
   getAllDownConsecutive: () => allDownConsecutive,
   getRampUpState: () => ({ rampUpPhase, rampUpQueriesDone }),
-  advanceRampUp: () => { rampUpQueriesDone++; if (rampUpQueriesDone >= RAMP_UP_QUERIES) { rampUpPhase = false; log('Ramp-up complete — returning to normal speed'); } },
+  makeSearchBackoffError,
+  advanceRampUp: () => {
+    if (!rampUpPhase) return;
+    rampUpQueriesDone++;
+    if (rampUpQueriesDone >= RAMP_UP_QUERIES) {
+      rampUpPhase = false;
+      log('Ramp-up complete — returning to normal speed');
+    }
+  },
   resetAllDown: () => { allDownConsecutive = 0; },
   getAllDownBackoff,
 };

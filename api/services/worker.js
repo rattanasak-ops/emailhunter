@@ -21,7 +21,13 @@ const session = {
   found: 0,
   blocksDetected: 0,
   recentSpeeds: [],
+  lastActivityAt: null,
+  lastError: null,
+  idleSince: Date.now(),
+  currentCompany: null,
 };
+
+const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '3', 10);
 
 function logSession() {
   if (session.startTime && session.processed > 0) {
@@ -37,15 +43,22 @@ function logSession() {
 
 // ─── Process One Company ─────────────────────────────────────
 async function processOneCompany() {
-  if (session.manualMode !== 'running' || !session.workerRunning) return false;
+  if (session.manualMode !== 'running' || !session.workerRunning) return { hasMore: false, consumed: false };
 
   const company = db.prepare(
     `SELECT id, company_name, retry_count, last_pattern_used, last_engines_used, rejection_reason FROM companies
      WHERE status IN ('pending','retry') ORDER BY CASE WHEN status='retry' THEN 0 ELSE 1 END, id ASC LIMIT 1`
   ).get();
-  if (!company) { log('Worker: no pending companies'); return false; }
+  if (!company) {
+    log('Worker: no pending companies');
+    session.currentCompany = null;
+    session.idleSince = Date.now();
+    return { hasMore: false, consumed: false };
+  }
 
   try {
+    session.currentCompany = { id: company.id, name: company.company_name };
+    session.lastActivityAt = Date.now();
     // Smart retry: ถ้า retry ครั้งที่ 2+ → บังคับใช้ directory/social patterns (tier 5-6)
     const forceDirectoryTier = company.retry_count >= 1 && company.rejection_reason !== 'engine_blocked';
     const queryInfo = forceDirectoryTier
@@ -57,13 +70,20 @@ async function processOneCompany() {
     const searchResult = await search.searchSearXNG(queryInfo.query, engines);
     let allEmails = extractEmails(searchResult.results || []);
     let source = 'search';
+    let sourceResults = searchResult.results || [];
+    let foundSourceUrl = sourceResults[0]?.url || null;
 
     // Fallback 1: Google CSE
     if (allEmails.length === 0 && search.canUseGoogleCSE()) {
       try {
         const cseResult = await search.searchGoogleCSE(`"${company.company_name}" email ติดต่อ`);
         const cseEmails = extractEmails(cseResult.results || []);
-        if (cseEmails.length > 0) { allEmails = cseEmails; source = 'google_cse'; }
+        if (cseEmails.length > 0) {
+          allEmails = cseEmails;
+          source = 'google_cse';
+          sourceResults = cseResult.results || [];
+          foundSourceUrl = sourceResults[0]?.url || null;
+        }
         else searchResult.results = [...(searchResult.results || []), ...(cseResult.results || [])];
       } catch (e) { log(`Worker: CSE error: ${e.message}`); }
     }
@@ -71,7 +91,11 @@ async function processOneCompany() {
     // Fallback 2: Contact Page Crawl
     if (allEmails.length === 0 && searchResult.results?.length > 0) {
       const crawlResult = await crawlForEmails(searchResult.results, company.company_name, company.retry_count);
-      if (crawlResult.emails.length > 0) { allEmails = crawlResult.emails; source = crawlResult.source; }
+      if (crawlResult.emails.length > 0) {
+        allEmails = crawlResult.emails;
+        source = crawlResult.source;
+        foundSourceUrl = crawlResult.sourceUrl || foundSourceUrl;
+      }
     }
 
     // Fallback 3: MX Guess
@@ -93,6 +117,7 @@ async function processOneCompany() {
           if (crawlFiltered.best) {
             filtered = crawlFiltered;
             source = crawlResult.source;
+            foundSourceUrl = crawlResult.sourceUrl || foundSourceUrl;
             log(`Worker: all_filtered recovery — found ${crawlFiltered.best} via ${source}`);
           }
         }
@@ -106,7 +131,7 @@ async function processOneCompany() {
     let status, email, sourceUrl, rejectionReason = null;
     if (filtered.best) {
       status = 'found'; email = filtered.best;
-      sourceUrl = searchResult.results?.[0]?.url || null;
+      sourceUrl = foundSourceUrl;
       session.found++;
       db.prepare('UPDATE daily_stats SET processed = processed + 1, found = found + 1 WHERE date = ?').run(today);
     } else {
@@ -132,6 +157,8 @@ async function processOneCompany() {
     search.trackPatternResult(queryInfo.pattern, status === 'found');
     ab.abState.hourlyResults.push({ ts: Date.now(), found: status === 'found' });
     session.processed++;
+    session.lastActivityAt = Date.now();
+    session.idleSince = null;
     session.recentSpeeds.push(Date.now());
     if (session.recentSpeeds.length > 20) session.recentSpeeds.shift();
     ab.trackResult(false);
@@ -139,23 +166,52 @@ async function processOneCompany() {
     if (session.processed % 10 === 0) { ab.checkHourlySuccessRate(); ab.checkRejectionSpike(); }
 
     log(`Worker: ${company.company_name} → ${status}${email ? ` (${email} via ${source})` : ''}${rejectionReason ? ` [${rejectionReason}]` : ''}`);
-    return true;
+    search.advanceRampUp();
+    session.currentCompany = null;
+    return { hasMore: true, consumed: true };
   } catch (err) {
+    session.lastError = { message: err.message, code: err.code || 'ERROR', at: nowISOStr() };
+    session.currentCompany = null;
+
+    if (err.code === 'ALL_ENGINES_DOWN' || err.code === 'SEARCH_BACKOFF') {
+      const pauseSec = err.backoffSec || search.getAllDownBackoff();
+      log(`Worker BACKOFF: ${company.company_name} — ${err.message} — pause ${pauseSec}s`);
+      ab.trackResult(true);
+      session.blocksDetected++;
+      ensureDailyStats(todayStr());
+      db.prepare('UPDATE daily_stats SET blocks_detected = blocks_detected + 1 WHERE date = ?').run(todayStr());
+      db.prepare(`UPDATE companies SET status='retry', error_message=?, rejection_reason=?, updated_at=? WHERE id=?`)
+        .run(err.message, REJECTION_REASONS.ENGINE_BLOCKED, nowISOStr(), company.id);
+      return { hasMore: true, consumed: false, blocked: true, delaySec: pauseSec };
+    }
+
     log(`Worker ERROR: ${company.company_name} — ${err.message}`);
     ab.trackResult(true);
     const errReason = err.message.includes('timeout') ? REJECTION_REASONS.TIMEOUT : REJECTION_REASONS.ENGINE_BLOCKED;
-    db.prepare(`UPDATE companies SET status='retry', error_message=?, rejection_reason=?, retry_count=retry_count+1, updated_at=? WHERE id=?`)
-      .run(err.message, errReason, nowISOStr(), company.id);
+    const nextRetryCount = (company.retry_count || 0) + 1;
+    const nextStatus = nextRetryCount >= MAX_RETRIES ? 'error' : 'retry';
+    db.prepare(`UPDATE companies SET status=?, error_message=?, rejection_reason=?, retry_count=?, updated_at=? WHERE id=?`)
+      .run(nextStatus, err.message, errReason, nextRetryCount, nowISOStr(), company.id);
+    if (nextStatus === 'error') {
+      ensureDailyStats(todayStr());
+      db.prepare('UPDATE daily_stats SET processed = processed + 1, errors = errors + 1 WHERE date = ?').run(todayStr());
+    }
     session.processed++;
-    return true;
+    session.lastActivityAt = Date.now();
+    session.idleSince = null;
+    return { hasMore: true, consumed: true };
   }
 }
 
 // ─── Worker Loop ─────────────────────────────────────────────
 async function workerLoop() {
-  if (!session.workerRunning || session.manualMode !== 'running') {
-    session.workerRunning = false; log('Worker stopped'); return;
-  }
+  try {
+    if (!session.workerRunning || session.manualMode !== 'running') {
+      session.workerRunning = false;
+      session.idleSince = Date.now();
+      log('Worker stopped');
+      return;
+    }
 
   const dailyLimit = ab.getDailyLimit();
   const processedToday = getProcessedToday();
@@ -165,7 +221,7 @@ async function workerLoop() {
     const stats = getDailyStats(todayStr());
     notifyLark('Daily Limit Reached', `**${formatNumber(processedToday)}/${formatNumber(dailyLimit)}** | Found: ${formatNumber(stats.found || 0)} | พัก ${Math.round(ab.workCycle.restDuration / 60000)} นาที`, 'blue');
     logSession();
-    session.workerTimer = setTimeout(() => { ab.startWorkPhase(); workerLoop(); }, ab.workCycle.restDuration);
+    session.workerTimer = setTimeout(() => { ab.startWorkPhase(); scheduleWorkerLoop(0); }, ab.workCycle.restDuration);
     return;
   }
 
@@ -181,29 +237,39 @@ async function workerLoop() {
     notifyLark(`พักรอบที่ ${ab.workCycle.cycleCount}`, `ทำไป ${formatNumber(ab.workCycle.queriesThisPhase)} ราย | วันนี้: ${formatNumber(processedToday)}/${formatNumber(dailyLimit)} | Found: ${formatNumber(stats.found || 0)} | พัก ${Math.round(ab.workCycle.restDuration / 60000)} นาที`, 'yellow');
     session.workerTimer = setTimeout(() => {
       if (!session.workerRunning || session.manualMode !== 'running') { session.workerRunning = false; return; }
-      ab.startWorkPhase(); workerLoop();
+      ab.startWorkPhase(); scheduleWorkerLoop(0);
     }, ab.workCycle.restDuration);
     return;
   }
 
-  const hasMore = await processOneCompany();
-  ab.workCycle.queriesThisPhase++;
-  ab.workCycle.totalQueriesToday++;
+  const result = await processOneCompany();
+  if (result.consumed) {
+    ab.workCycle.queriesThisPhase++;
+    ab.workCycle.totalQueriesToday++;
+  }
 
-  if (!hasMore) {
+  if (!result.hasMore) {
     session.workerRunning = false; session.manualMode = null; ab.workCycle.phase = 'idle';
+    session.idleSince = Date.now();
     notifyLark('งานเสร็จ', `**ประมวลผลครบ!** วันนี้: ${formatNumber(processedToday)} | Found: ${formatNumber(session.found)}`, 'blue');
+    return;
+  }
+
+  if (result.blocked) {
+    session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), (result.delaySec || 300) * 1000);
     return;
   }
 
   if (search.getAllDownConsecutive() > 0) {
     const sec = search.getAllDownBackoff();
-    session.workerTimer = setTimeout(workerLoop, sec * 1000);
+    session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), sec * 1000);
     return;
   }
 
   // Layer 1: Base delay (adaptive, includes warm-up)
-  const delay = ab.getAdaptiveDelay(ab.workCycle.queriesThisPhase);
+  let delay = ab.getAdaptiveDelay(ab.workCycle.queriesThisPhase);
+  const rampUp = search.getRampUpState();
+  if (rampUp.rampUpPhase) delay *= 2;
 
   // Layer 2: Error backoff
   const errorCheck = ab.checkErrorBackoff();
@@ -211,10 +277,37 @@ async function workerLoop() {
     session.blocksDetected++;
     ensureDailyStats(todayStr());
     db.prepare('UPDATE daily_stats SET blocks_detected = blocks_detected + 1 WHERE date = ?').run(todayStr());
-    session.workerTimer = setTimeout(workerLoop, errorCheck.pauseDuration * 1000);
+    session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), errorCheck.pauseDuration * 1000);
   } else {
-    session.workerTimer = setTimeout(workerLoop, delay * 1000);
+    session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), delay * 1000);
   }
+  } catch (err) {
+    session.lastError = { message: err.message, code: err.code || 'WORKER_LOOP_ERROR', at: nowISOStr() };
+    session.currentCompany = null;
+    log(`Worker LOOP ERROR: ${err.stack || err.message}`);
+    ab.trackResult(true);
+    if (session.workerRunning && session.manualMode === 'running') {
+      const pauseSec = Math.min(900, Math.max(60, search.getAllDownBackoff ? search.getAllDownBackoff() : 60));
+      session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), pauseSec * 1000);
+    } else {
+      session.workerRunning = false;
+      session.idleSince = Date.now();
+    }
+  }
+}
+
+function scheduleWorkerLoop(delayMs = 0) {
+  if (delayMs > 0) {
+    session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), delayMs);
+    return;
+  }
+  Promise.resolve(workerLoop()).catch((err) => {
+    session.lastError = { message: err.message, code: err.code || 'UNHANDLED_WORKER_ERROR', at: nowISOStr() };
+    log(`Worker unhandled error: ${err.stack || err.message}`);
+    if (session.workerRunning && session.manualMode === 'running') {
+      session.workerTimer = setTimeout(() => scheduleWorkerLoop(0), 60 * 1000);
+    }
+  });
 }
 
 // ─── Public API ──────────────────────────────────────────────
@@ -223,9 +316,10 @@ function start() {
   session.manualModeSetAt = new Date().toISOString();
   session.startTime = new Date().toISOString();
   session.processed = 0; session.found = 0; session.blocksDetected = 0;
+  session.lastError = null; session.idleSince = null; session.currentCompany = null;
   if (!session.workerRunning) {
     session.workerRunning = true; ab.workCycle.phase = 'idle';
-    log('START — worker started'); workerLoop();
+    log('START — worker started'); scheduleWorkerLoop(0);
   }
 }
 
@@ -234,6 +328,8 @@ function stop() {
   session.manualMode = 'stopped';
   session.manualModeSetAt = new Date().toISOString();
   session.workerRunning = false; ab.workCycle.phase = 'idle';
+  session.idleSince = Date.now();
+  session.currentCompany = null;
   if (session.workerTimer) { clearTimeout(session.workerTimer); session.workerTimer = null; }
   notifyLark('หยุดทำงาน', `Processed: ${formatNumber(prev.processed)} | Found: ${formatNumber(prev.found)}`, 'yellow');
   log(`STOP — processed: ${prev.processed}, found: ${prev.found}`);
@@ -242,19 +338,32 @@ function stop() {
 function setAuto() {
   session.manualMode = null; session.manualModeSetAt = null;
   session.workerRunning = false; ab.workCycle.phase = 'idle';
+  session.idleSince = Date.now();
+  session.currentCompany = null;
   if (session.workerTimer) { clearTimeout(session.workerTimer); session.workerTimer = null; }
 }
 
 function resetState() {
   session.startTime = null; session.processed = 0; session.found = 0;
   session.blocksDetected = 0; session.recentSpeeds.length = 0;
+  session.lastActivityAt = null; session.lastError = null; session.idleSince = Date.now(); session.currentCompany = null;
   ab.resetAbState();
+}
+
+function getState() {
+  return {
+    ...session,
+    sessionStartTime: session.startTime,
+    sessionProcessed: session.processed,
+    sessionFound: session.found,
+    sessionBlocksDetected: session.blocksDetected,
+  };
 }
 
 module.exports = {
   start, stop, setAuto, resetState, logSession,
   getDailyLimit: ab.getDailyLimit,
-  getState: () => session,
+  getState,
   getWorkCycle: () => ab.workCycle,
   getRestRemaining: ab.getRestRemaining,
 };

@@ -7,13 +7,86 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const XLSX = require('xlsx');
+const readXlsxFile = require('read-excel-file/node');
 const Database = require('better-sqlite3');
 const { db, log, todayStr, UPLOAD_DIR, BACKUP_DIR, DATA_DIR, formatNumber, ensureDailyStats, getDailyStats, getProcessedToday, randomBetween } = require('../config/database');
 const { ALLOWED_EXTENSIONS } = require('../config/constants');
 const { notifyLark, sendLineNotify } = require('../services/notification');
 const worker = require('../services/worker');
 const search = require('../services/search');
+const { filterValidEmails } = require('../services/scorer');
+
+function isWorkerActive() {
+  const state = worker.getState();
+  return state.workerRunning || state.manualMode === 'running';
+}
+
+function rejectIfWorkerActive(res, action) {
+  if (!isWorkerActive()) return false;
+  res.status(409).json({ error: `Cannot ${action} while worker is running. Stop the worker first.` });
+  return true;
+}
+
+function parseCSVLine(line) {
+  const fields = []; let current = ''; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (inQuotes && line[i + 1] === '"') { current += '"'; i++; } else inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { fields.push(current); current = ''; }
+    else current += ch;
+  }
+  fields.push(current);
+  return fields;
+}
+
+function cellToString(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).trim();
+}
+
+async function readCompanyImportRows(filePath, ext) {
+  if (ext === '.xlsx') {
+    const rows = await readXlsxFile(filePath);
+    return rows.map(row => row.map(cellToString)).filter(row => row.some(Boolean));
+  }
+
+  if (ext === '.csv') {
+    const content = fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
+    return content.split(/\r?\n/).filter(l => l.trim()).map(parseCSVLine).map(row => row.map(cellToString));
+  }
+
+  throw new Error('Unsupported import file. Use .xlsx or .csv');
+}
+
+function normalizeCompanyImport(rawRows) {
+  if (rawRows.length === 0) return { rows: [], companyCol: null, taxIdCol: null, industryCol: null };
+
+  const firstRow = rawRows[0].map(cellToString);
+  const headerPattern = /company|บริษัท|ชื่อ|name|tax_id|เลขที่|tax|เลขประจำตัว|industry|ประเภท|อุตสาหกรรม/i;
+  const hasHeader = firstRow.some(h => headerPattern.test(h));
+
+  if (!hasHeader) {
+    return {
+      rows: rawRows.map(row => ({ company_name: cellToString(row[0]) })).filter(row => row.company_name),
+      companyCol: 'company_name',
+      taxIdCol: null,
+      industryCol: null,
+    };
+  }
+
+  const headers = firstRow.map((h, i) => h || `column_${i + 1}`);
+  const rows = rawRows.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((header, index) => { obj[header] = cellToString(row[index]); });
+    return obj;
+  });
+  const companyCol = headers.find(h => /company|บริษัท|ชื่อ|name/i.test(h)) || headers[0];
+  const taxIdCol = headers.find(h => /tax_id|เลขที่|tax|เลขประจำตัว/i.test(h));
+  const industryCol = headers.find(h => /industry|ประเภท|อุตสาหกรรม/i.test(h));
+
+  return { rows, companyCol, taxIdCol, industryCol };
+}
 
 // ─── Multer Setup ────────────────────────────────────────────
 const upload = multer({
@@ -29,6 +102,7 @@ const upload = multer({
 // ─── Reset ───────────────────────────────────────────────────
 router.post('/reset', (req, res) => {
   try {
+    if (rejectIfWorkerActive(res, 'reset data')) return;
     db.prepare('DELETE FROM companies').run();
     db.prepare('DELETE FROM daily_stats').run();
     db.prepare('DELETE FROM session_log').run();
@@ -42,38 +116,26 @@ router.post('/reset', (req, res) => {
   }
 });
 
-// ─── Import Excel ────────────────────────────────────────────
-router.post('/import', upload.single('file'), (req, res) => {
+// ─── Import Company List ─────────────────────────────────────
+router.post('/import', upload.single('file'), async (req, res) => {
   let filePath = null;
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     filePath = req.file.path;
+    if (rejectIfWorkerActive(res, 'import data')) {
+      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      return;
+    }
     log(`Importing file: ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)}MB)`);
 
-    const workbook = XLSX.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    let rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const rawRows = await readCompanyImportRows(filePath, ext);
+    const { rows, companyCol, taxIdCol, industryCol } = normalizeCompanyImport(rawRows);
 
-    if (rows.length === 0) return res.status(400).json({ error: 'Empty spreadsheet' });
-
-    const headers = Object.keys(rows[0]);
-    let companyCol = headers.find(h => /company|บริษัท|ชื่อ|name/i.test(h));
-    const taxIdCol = headers.find(h => /tax_id|เลขที่|tax|เลขประจำตัว/i.test(h));
-    const industryCol = headers.find(h => /industry|ประเภท|อุตสาหกรรม/i.test(h));
-
-    if (!companyCol && headers.length === 1) {
-      log('No header detected, single column — treating as headerless company list');
-      const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-      rows = rawRows.map(r => ({ company_name: String(r[0] || '').trim() })).filter(r => r.company_name);
-      companyCol = 'company_name';
-    } else if (!companyCol && headers.length > 1) {
-      log(`No header match found, using first column "${headers[0]}" as company name`);
-      companyCol = headers[0];
-    }
+    if (rows.length === 0) return res.status(400).json({ error: 'Empty import file' });
 
     if (!companyCol) {
-      return res.status(400).json({ error: 'Cannot detect company name column', headers });
+      return res.status(400).json({ error: 'Cannot detect company name column' });
     }
 
     const insert = db.prepare('INSERT OR IGNORE INTO companies (company_name, tax_id, industry) VALUES (?, ?, ?)');
@@ -147,6 +209,14 @@ router.post('/restore', upload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     filePath = req.file.path;
+    if (path.extname(req.file.originalname).toLowerCase() !== '.csv') {
+      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      return res.status(400).json({ error: 'Restore supports .csv files only' });
+    }
+    if (rejectIfWorkerActive(res, 'restore data')) {
+      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      return;
+    }
     const content = fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
     const lines = content.split('\n').filter(l => l.trim());
     if (lines.length < 2) return res.status(400).json({ error: 'Empty CSV file' });
@@ -159,18 +229,6 @@ router.post('/restore', upload.single('file'), (req, res) => {
     const statusIdx = header.indexOf('status');
     const dateIdx = header.indexOf('processed_date');
     if (companyIdx === -1) return res.status(400).json({ error: 'Missing company_name column' });
-
-    function parseCSVLine(line) {
-      const fields = []; let current = ''; let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') { if (inQuotes && line[i + 1] === '"') { current += '"'; i++; } else inQuotes = !inQuotes; }
-        else if (ch === ',' && !inQuotes) { fields.push(current); current = ''; }
-        else current += ch;
-      }
-      fields.push(current);
-      return fields;
-    }
 
     const insert = db.prepare(`INSERT OR IGNORE INTO companies (company_name, email, all_emails, source_url, status, processed_date, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))`);
     let imported = 0, duplicates = 0, errors = 0;
@@ -205,6 +263,7 @@ router.post('/restore', upload.single('file'), (req, res) => {
 // ─── Retry not_found ─────────────────────────────────────────
 router.post('/retry-not-found', (req, res) => {
   try {
+    if (rejectIfWorkerActive(res, 'retry not_found records')) return;
     const { date_from, date_to, limit: maxRetry } = req.body || {};
     const dateFrom = date_from || '2026-03-18';
     const dateTo = date_to || '2026-03-19';
@@ -221,6 +280,96 @@ router.post('/retry-not-found', (req, res) => {
     res.json({ success: true, retried: result.changes, date_range: `${dateFrom} to ${dateTo}` });
   } catch (err) {
     log(`ERROR /api/retry-not-found: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Legacy n8n Compatibility ─────────────────────────────────
+// These endpoints keep old imported workflows from failing hard, but the API
+// worker remains the owner of queue processing and anti-block behavior.
+router.get('/companies/next', (req, res) => {
+  try {
+    const state = worker.getState();
+    if (state.workerRunning || state.manualMode === 'running') {
+      return res.json({ company: null, session: { should_stop: true, reason: 'api_worker_running' } });
+    }
+
+    const company = db.prepare(`
+      SELECT id, company_name, retry_count, last_pattern_used, rejection_reason
+      FROM companies
+      WHERE status IN ('pending','retry')
+      ORDER BY CASE WHEN status='retry' THEN 0 ELSE 1 END, id ASC
+      LIMIT 1
+    `).get();
+
+    if (!company) return res.json({ company: null, session: { should_stop: true, reason: 'empty_queue' } });
+
+    const forceDirectoryTier = company.retry_count >= 1 && company.rejection_reason !== 'engine_blocked';
+    const queryInfo = forceDirectoryTier
+      ? search.buildQueryFromTier(company.company_name, [5, 6], company.last_pattern_used)
+      : search.buildQuery(company.company_name, company.last_pattern_used);
+    const engines = search.pickEnginesForQuery();
+
+    res.json({
+      company: { id: company.id, name: company.company_name, company_name: company.company_name },
+      search: { query: queryInfo.query, engines, pattern: queryInfo.pattern, tier: queryInfo.tier, delay: 15, shouldPause: false },
+      session: { should_stop: false },
+    });
+  } catch (err) {
+    const backoffSec = err.backoffSec || 300;
+    log(`Legacy /companies/next backoff: ${err.message}`);
+    res.status(503).json({
+      company: null,
+      search: { shouldPause: true, delay: backoffSec },
+      session: { should_stop: false, reason: err.code || 'search_backoff' },
+      error: err.message,
+    });
+  }
+});
+
+router.post('/companies/:id/result', (req, res) => {
+  try {
+    if (isWorkerActive()) return res.status(409).json({ error: 'API worker is running; legacy result writes are blocked.' });
+
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid company id' });
+
+    const company = db.prepare('SELECT id, company_name FROM companies WHERE id = ?').get(id);
+    if (!company) return res.status(404).json({ error: 'Company not found' });
+
+    const submitted = Array.isArray(req.body?.all_emails)
+      ? req.body.all_emails
+      : String(req.body?.all_emails || req.body?.email || '').split(',').map(s => s.trim()).filter(Boolean);
+    const source = req.body?.source || 'legacy_n8n';
+    const filtered = filterValidEmails(submitted, company.company_name, source);
+    const email = filtered.best || null;
+    const status = email ? 'found' : 'not_found';
+    const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).replace(' ', 'T');
+    const today = todayStr();
+    ensureDailyStats(today);
+
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE companies
+        SET email=?, all_emails=?, source_url=?, status=?, rejection_reason=?, processed_date=?, updated_at=?
+        WHERE id=?
+      `).run(
+        email,
+        filtered.all.length > 0 ? filtered.all.join(', ') : (submitted.length > 0 ? submitted.join(', ') : null),
+        req.body?.source_url || null,
+        status,
+        email ? null : 'legacy_no_valid_email',
+        now,
+        now,
+        id,
+      );
+      if (email) db.prepare('UPDATE daily_stats SET processed = processed + 1, found = found + 1 WHERE date = ?').run(today);
+      else db.prepare('UPDATE daily_stats SET processed = processed + 1, not_found = not_found + 1 WHERE date = ?').run(today);
+    })();
+
+    res.json({ success: true, id, status, email, confidence: filtered.confidence });
+  } catch (err) {
+    log(`ERROR /api/companies/:id/result: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -279,29 +428,56 @@ router.post('/report/schedule-check', async (req, res) => {
 });
 
 // ─── Backup System ───────────────────────────────────────────
-function performBackup() {
+const BACKUP_INTERVAL_MS = Math.max(1, parseInt(process.env.BACKUP_INTERVAL_HOURS || '6', 10)) * 60 * 60 * 1000;
+const BACKUP_MIN_INTERVAL_MS = Math.max(0, parseInt(process.env.BACKUP_MIN_INTERVAL_MINUTES || '30', 10)) * 60 * 1000;
+const BACKUP_ON_START = String(process.env.BACKUP_ON_START || 'false').toLowerCase() === 'true';
+
+function latestBackupAgeMs() {
   try {
+    const backups = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('emailhunter_') && f.endsWith('.db'))
+      .map(f => fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs)
+      .sort((a, b) => b - a);
+    if (backups.length === 0) return Infinity;
+    return Date.now() - backups[0];
+  } catch {
+    return Infinity;
+  }
+}
+
+function performBackup(options = {}) {
+  try {
+    const { force = false, reason = 'scheduled' } = options;
+    if (!force && latestBackupAgeMs() < BACKUP_MIN_INTERVAL_MS) {
+      log(`Backup skipped — recent backup exists (${reason})`);
+      return Promise.resolve(false);
+    }
+
     const total = db.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
-    if (total === 0) { log('Backup skipped — empty'); return; }
+    if (total === 0) { log('Backup skipped — empty'); return Promise.resolve(false); }
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupPath = path.join(BACKUP_DIR, `emailhunter_${timestamp}.db`);
-    db.backup(backupPath).then(() => {
-      log(`Backup created: ${backupPath} (${total} companies)`);
+    return db.backup(backupPath).then(() => {
+      log(`Backup created: ${backupPath} (${total} companies, ${reason})`);
       const backups = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('emailhunter_') && f.endsWith('.db')).sort().reverse();
       for (let i = 7; i < backups.length; i++) {
         fs.unlinkSync(path.join(BACKUP_DIR, backups[i]));
         log(`Deleted old backup: ${backups[i]}`);
       }
+      return true;
     }).catch(err => log(`Backup FAILED: ${err.message}`));
-  } catch (err) { log(`Backup error: ${err.message}`); }
+  } catch (err) {
+    log(`Backup error: ${err.message}`);
+    return Promise.resolve(false);
+  }
 }
 
-// Auto-backup every 6 hours + on startup
-setInterval(performBackup, 6 * 60 * 60 * 1000);
-setTimeout(performBackup, 5000);
+// Auto-backup every N hours. Startup backup is opt-in to avoid disk-write spikes on deploy/restart.
+setInterval(() => performBackup({ reason: 'scheduled' }), BACKUP_INTERVAL_MS);
+if (BACKUP_ON_START) setTimeout(() => performBackup({ reason: 'startup' }), 5000);
 
 router.post('/backup', (req, res) => {
-  try { performBackup(); res.json({ success: true, message: 'Backup initiated' }); }
+  try { performBackup({ force: true, reason: 'manual' }); res.json({ success: true, message: 'Backup initiated' }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -315,6 +491,7 @@ router.get('/backups', (req, res) => {
 
 router.post('/backup/restore', (req, res) => {
   try {
+    if (rejectIfWorkerActive(res, 'restore a backup')) return;
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'Backup name required' });
     const backupPath = path.join(BACKUP_DIR, name);
@@ -322,9 +499,12 @@ router.post('/backup/restore', (req, res) => {
     const testDb = new Database(backupPath, { readonly: true });
     const count = testDb.prepare('SELECT COUNT(*) as cnt FROM companies').get().cnt;
     testDb.close();
-    fs.copyFileSync(backupPath, path.join(DATA_DIR, 'emailhunter.db'));
-    log(`Restored from backup: ${name} (${count} companies)`);
-    res.json({ success: true, message: `Restored ${count} companies. Restart container to apply.` });
+    log(`Backup restore requested but blocked for online safety: ${name} (${count} companies)`);
+    res.status(409).json({
+      error: 'Online DB restore is disabled to prevent SQLite corruption. Stop the API container and restore the DB offline.',
+      backup: name,
+      companies: count,
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

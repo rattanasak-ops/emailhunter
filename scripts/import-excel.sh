@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# EmailHunter — Excel Import Script
+# EmailHunter — Company List Import Script
 # Usage: ./scripts/import-excel.sh /path/to/companies.xlsx
 
 RED='\033[0;31m'
@@ -12,11 +12,11 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${CYAN}╔══════════════════════════════════════════╗"
-echo -e "║     EmailHunter — Excel Import Script    ║"
+echo -e "║   EmailHunter — Company Import Script    ║"
 echo -e "╚══════════════════════════════════════════╝${NC}"
 
 if [ -z "${1:-}" ]; then
-    echo -e "${RED}ERROR: กรุณาระบุไฟล์ Excel${NC}"
+    echo -e "${RED}ERROR: กรุณาระบุไฟล์ .xlsx หรือ .csv${NC}"
     echo "Usage: $0 /path/to/companies.xlsx"
     exit 1
 fi
@@ -29,8 +29,8 @@ fi
 
 # Check file extension
 EXT="${FILE##*.}"
-if [[ "$EXT" != "xlsx" && "$EXT" != "xls" ]]; then
-    echo -e "${RED}ERROR: รองรับเฉพาะไฟล์ .xlsx หรือ .xls${NC}"
+if [[ "$EXT" != "xlsx" && "$EXT" != "csv" ]]; then
+    echo -e "${RED}ERROR: รองรับเฉพาะไฟล์ .xlsx หรือ .csv${NC}"
     exit 1
 fi
 

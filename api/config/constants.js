@@ -160,7 +160,7 @@ const USER_AGENTS = [
 ];
 
 // ─── File Upload ─────────────────────────────────────────────
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+const ALLOWED_EXTENSIONS = ['.xlsx', '.csv'];
 
 module.exports = {
   QUERY_PATTERNS,

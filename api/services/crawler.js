@@ -81,13 +81,41 @@ function extractEmailsFromHtml(html) {
 
 // ─── Page Fetcher ────────────────────────────────────────────
 
-function fetchPage(pageUrl, timeoutMs = 10000) {
+function looksBlocked(html) {
+  if (!html) return false;
+  const text = html.slice(0, 5000).toLowerCase();
+  return text.includes('captcha') ||
+    text.includes('too many requests') ||
+    text.includes('access denied') ||
+    text.includes('unusual traffic') ||
+    text.includes('verify you are human');
+}
+
+function fetchPage(pageUrl, timeoutMs = 10000, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (redirectCount > 5) {
+      log(`Crawler: redirect limit exceeded — ${pageUrl}`);
+      return resolve('');
+    }
     const mod = pageUrl.startsWith('https') ? https : http;
     const options = { timeout: timeoutMs, headers: { 'User-Agent': pickUserAgent() } };
     mod.get(pageUrl, options, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchPage(res.headers.location, timeoutMs).then(resolve).catch(reject);
+        try {
+          const nextUrl = new URL(res.headers.location, pageUrl).href;
+          return fetchPage(nextUrl, timeoutMs, redirectCount + 1).then(resolve).catch(reject);
+        } catch {
+          return resolve('');
+        }
+      }
+      if (res.statusCode === 403 || res.statusCode === 429) {
+        log(`Crawler: blocked ${res.statusCode} — ${pageUrl}`);
+        res.resume();
+        return resolve('');
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return resolve('');
       }
       let data = '';
       res.setEncoding('utf8');
@@ -95,7 +123,14 @@ function fetchPage(pageUrl, timeoutMs = 10000) {
         data += chunk;
         if (data.length > 500000) { res.destroy(); resolve(data); }
       });
-      res.on('end', () => resolve(data));
+      res.on('end', () => {
+        if (looksBlocked(data)) {
+          log(`Crawler: block page detected — ${pageUrl}`);
+          return resolve('');
+        }
+        resolve(data);
+      });
+      res.on('error', () => resolve(''));
     }).on('error', () => resolve('')).on('timeout', function () { this.destroy(); resolve(''); });
   });
 }
@@ -132,15 +167,26 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
   });
 
   const triedDomains = new Set();
+  const requestBudgetByHost = new Map();
   const crawlLimit = retryCount >= 1 ? 5 : 3;
+
+  function canSpend(host) {
+    const used = requestBudgetByHost.get(host) || 0;
+    const limit = retryCount >= 1 ? 6 : 4;
+    if (used >= limit) return false;
+    requestBudgetByHost.set(host, used + 1);
+    return true;
+  }
 
   for (const pageUrl of sortedUrls.slice(0, crawlLimit)) {
     try {
+      const initialHost = new URL(pageUrl).hostname;
+      if (!canSpend(initialHost)) continue;
       const html = await fetchPage(pageUrl);
       const pageEmails = extractEmailsFromHtml(html);
       if (pageEmails.length > 0) {
         log(`Crawler: found ${pageEmails.length} emails from ${pageUrl}`);
-        return { emails: pageEmails, source: 'website' };
+        return { emails: pageEmails, source: 'website', sourceUrl: pageUrl };
       }
 
       const urlObj = new URL(pageUrl);
@@ -150,12 +196,13 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
 
         // Step 2a: Crawl homepage — email มักอยู่ใน footer
         try {
+          if (!canSpend(urlObj.hostname)) continue;
           const homeHtml = await fetchPage(baseUrl + '/');
           if (homeHtml.length > 1000) {
             const homeEmails = extractEmailsFromHtml(homeHtml);
             if (homeEmails.length > 0) {
               log(`Crawler: found ${homeEmails.length} emails from ${baseUrl}/ (homepage)`);
-              return { emails: homeEmails, source: 'website' };
+              return { emails: homeEmails, source: 'website', sourceUrl: baseUrl + '/' };
             }
           }
         } catch { /* skip */ }
@@ -163,12 +210,13 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
         // Step 2b: Contact pages
         for (const contactPath of CONTACT_PATHS) {
           try {
+            if (!canSpend(urlObj.hostname)) break;
             const contactHtml = await fetchPage(baseUrl + contactPath);
             if (contactHtml.length > 1000) {
               const contactEmails = extractEmailsFromHtml(contactHtml);
               if (contactEmails.length > 0) {
                 log(`Crawler: found ${contactEmails.length} emails from ${baseUrl + contactPath}`);
-                return { emails: contactEmails, source: 'contact-page' };
+                return { emails: contactEmails, source: 'contact-page', sourceUrl: baseUrl + contactPath };
               }
             }
           } catch { /* skip */ }

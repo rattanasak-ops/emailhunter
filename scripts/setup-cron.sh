@@ -4,7 +4,7 @@
 # รันครั้งเดียว: bash scripts/setup-cron.sh
 # ─────────────────────────────────────────────────────────────
 
-SCRIPT_DIR="/Users/rattanasak/Documents/Cursor Project/EmailHunter/scripts"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ทำให้ scripts executable
 chmod +x "$SCRIPT_DIR/watchdog.sh"

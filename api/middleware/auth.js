@@ -3,6 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 
 const API_KEY = process.env.API_KEY || '';
+if (API_KEY === '__REPLACE_ME__') {
+  throw new Error('API_KEY is still __REPLACE_ME__; set a generated key or leave it empty only for local development');
+}
 
 function authMiddleware(req, res, next) {
   // Health check ไม่ต้อง auth (สำหรับ Docker healthcheck)

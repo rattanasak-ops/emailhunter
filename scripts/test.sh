@@ -40,7 +40,7 @@ test_service() {
 
 # ทดสอบ Containers Running
 echo -e "${BLUE}[1] Container Status${NC}"
-for cname in emailhunter-searxng emailhunter-redis emailhunter-n8n emailhunter-dashboard; do
+for cname in emailhunter-searxng emailhunter-redis emailhunter-n8n emailhunter-api emailhunter-dashboard; do
     status=$(docker inspect --format='{{.State.Status}}' "$cname" 2>/dev/null || echo "not found")
     if [ "$status" = "running" ]; then
         echo -e "  ${GREEN}PASS${NC} $cname: running"
@@ -56,15 +56,19 @@ echo ""
 # ทดสอบ Services
 echo -e "${BLUE}[2] Service Health${NC}"
 test_service "SearXNG (port 8888)" \
-    "curl -sf 'http://localhost:8888/search?q=test&format=json' --max-time 15" \
-    "results"
+    "curl -sf 'http://localhost:8888/healthz' --max-time 10 || docker exec emailhunter-searxng wget -qO- 'http://127.0.0.1:8080/healthz'" \
+    "OK"
 
-test_service "n8n (port 5679)" \
-    "curl -sf 'http://localhost:5679/healthz' --max-time 10" \
+test_service "API (internal health)" \
+    "docker exec emailhunter-api wget -qO- 'http://127.0.0.1:3456/api/health'" \
+    "ok"
+
+test_service "n8n (port 5680)" \
+    "curl -sf 'http://localhost:5680/healthz' --max-time 10 || docker exec emailhunter-n8n wget -qO- 'http://127.0.0.1:5678/healthz'" \
     "ok"
 
 test_service "Dashboard (port 8890)" \
-    "curl -sf 'http://localhost:8890' --max-time 10" \
+    "curl -sf 'http://localhost:8890' --max-time 10 || docker exec emailhunter-dashboard wget -qO- 'http://127.0.0.1'" \
     "EmailHunter"
 
 test_service "Redis (PING)" \
@@ -75,12 +79,13 @@ echo ""
 
 # ทดสอบ Network
 echo -e "${BLUE}[3] Network${NC}"
-NETWORK=$(docker network inspect emailhunter-network --format='{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "not found")
-if [ "$NETWORK" = "172.21.0.0/16" ]; then
+NETWORK_NAME=$(docker inspect --format='{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' emailhunter-api 2>/dev/null || true)
+NETWORK=$(docker network inspect "$NETWORK_NAME" --format='{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "not found")
+if [ "$NETWORK" = "172.25.0.0/16" ]; then
     echo -e "  ${GREEN}PASS${NC} Network subnet: $NETWORK"
     PASS=$((PASS + 1))
 else
-    echo -e "  ${RED}FAIL${NC} Network subnet: $NETWORK (expected 172.21.0.0/16)"
+    echo -e "  ${RED}FAIL${NC} Network subnet: $NETWORK (expected 172.25.0.0/16)"
     FAIL=$((FAIL + 1))
 fi
 

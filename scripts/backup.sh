@@ -30,10 +30,15 @@ echo -e "${BLUE}[1/4] สำรอง n8n data volume...${NC}"
 TEMP_DIR=$(mktemp -d)
 docker cp emailhunter-n8n:/home/node/.n8n "$TEMP_DIR/n8n-data" 2>/dev/null || echo -e "${YELLOW}  ข้ามไป — n8n container อาจไม่ทำงาน${NC}"
 
-echo -e "${BLUE}[2/4] สำรอง shared data...${NC}"
+echo -e "${BLUE}[2/5] สำรอง API database...${NC}"
+mkdir -p "$TEMP_DIR/api-data"
+docker exec emailhunter-api sqlite3 /data/emailhunter.db ".backup '/data/backups/backup_${TIMESTAMP}_emailhunter.db'" 2>/dev/null || echo -e "${YELLOW}  ข้ามไป — API container/sqlite อาจไม่พร้อม${NC}"
+cp "$BACKUP_DIR/backup_${TIMESTAMP}_emailhunter.db" "$TEMP_DIR/api-data/emailhunter.db" 2>/dev/null || true
+
+echo -e "${BLUE}[3/5] สำรอง shared data...${NC}"
 docker cp emailhunter-n8n:/home/node/shared "$TEMP_DIR/shared-data" 2>/dev/null || echo -e "${YELLOW}  ข้ามไป — shared data อาจไม่มี${NC}"
 
-echo -e "${BLUE}[3/4] สำรอง config files...${NC}"
+echo -e "${BLUE}[4/5] สำรอง config files...${NC}"
 mkdir -p "$TEMP_DIR/configs"
 cp -r "$PROJECT_DIR/docker-compose.yml" "$TEMP_DIR/configs/" 2>/dev/null || true
 cp -r "$PROJECT_DIR/.env" "$TEMP_DIR/configs/" 2>/dev/null || true
@@ -42,7 +47,7 @@ cp -r "$PROJECT_DIR/n8n-workflows" "$TEMP_DIR/configs/" 2>/dev/null || true
 cp -r "$PROJECT_DIR/dashboard" "$TEMP_DIR/configs/" 2>/dev/null || true
 cp -r "$PROJECT_DIR/stats.json" "$TEMP_DIR/configs/" 2>/dev/null || true
 
-echo -e "${BLUE}[4/4] สร้างไฟล์ backup...${NC}"
+echo -e "${BLUE}[5/5] สร้างไฟล์ backup...${NC}"
 cd "$TEMP_DIR"
 tar czf "$BACKUP_DIR/$BACKUP_FILE" . 2>/dev/null
 

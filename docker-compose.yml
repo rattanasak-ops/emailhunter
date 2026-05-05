@@ -62,15 +62,20 @@ services:
     container_name: emailhunter-api
     environment:
       - LINE_NOTIFY_TOKEN=${LINE_NOTIFY_TOKEN}
-      - LARK_APP_ID=${LARK_APP_ID}
-      - LARK_APP_SECRET=${LARK_APP_SECRET}
+      - LARK_APP_ID=${LARK_APP_ID:-}
+      - LARK_APP_SECRET=${LARK_APP_SECRET:-}
       - LARK_CHAT_ID=${LARK_CHAT_ID}
+      - LARK_WEBHOOK_URL=${LARK_WEBHOOK_URL}
       - GOOGLE_CSE_API_KEY=${GOOGLE_CSE_API_KEY}
-      - GOOGLE_CSE_API_KEYS=${GOOGLE_CSE_API_KEYS}
+      - GOOGLE_CSE_API_KEYS=${GOOGLE_CSE_API_KEYS:-}
       - GOOGLE_CSE_CX=${GOOGLE_CSE_CX}
       - USE_PROXY=${USE_PROXY:-true}
       - API_KEY=${API_KEY}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8890,http://127.0.0.1:8890}
+      - BACKUP_ON_START=${BACKUP_ON_START:-false}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-6}
+      - BACKUP_MIN_INTERVAL_MINUTES=${BACKUP_MIN_INTERVAL_MINUTES:-30}
+      - CSV_EXPORT_ON_SHUTDOWN=${CSV_EXPORT_ON_SHUTDOWN:-false}
       - TZ=Asia/Bangkok
     volumes:
       - api-data:/data

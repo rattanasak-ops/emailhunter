@@ -1194,10 +1194,10 @@
         zone.classList.remove('dragover');
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           var file = e.dataTransfer.files[0];
-          if (file.name.match(/\.(xlsx|xls)$/i)) {
+          if (file.name.match(/\.(xlsx|csv)$/i)) {
             handleFileSelect(file);
           } else {
-            alert('กรุณาเลือกไฟล์ .xlsx หรือ .xls เท่านั้น');
+            alert('กรุณาเลือกไฟล์ .xlsx หรือ .csv เท่านั้น');
           }
         }
       });
