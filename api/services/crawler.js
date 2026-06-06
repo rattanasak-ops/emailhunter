@@ -12,7 +12,8 @@ const { log } = require('../config/database');
 const {
   USER_AGENTS, CRAWL_SKIP_DOMAINS, CONTACT_PATHS,
   ALLOWED_TLDS, EXTENDED_TLDS, EMAIL_PREFIXES,
-  THAI_COMPANY_SUFFIXES,
+  THAI_COMPANY_SUFFIXES, SEARCH_RESULT_NOISE_DOMAINS,
+  NEWS_DOMAINS, JOB_BOARD_DOMAINS, DIRECTORY_DOMAINS, SOCIAL_DOMAINS,
 } = require('../config/constants');
 const { extractEnglishParts, isDomainRelatedToCompany } = require('./scorer');
 
@@ -25,14 +26,145 @@ function pickUserAgent() {
 }
 
 // ─── Email Extraction from text ──────────────────────────────
-const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const EMAIL_REGEX = /(?:^|[^\w.+%-])([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,24})(?![a-zA-Z0-9.-])/g;
+
+function decodeBasicHtmlEntities(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&commat;/gi, '@')
+    .replace(/&period;/gi, '.')
+    .replace(/&dot;/gi, '.')
+    .replace(/&amp;/gi, '&');
+}
+
+function normalizeEmail(email) {
+  if (!email) return '';
+  const clean = email.toLowerCase().replace(/^mailto:/, '').replace(/[<>"'()[\]{},;:]+$/g, '');
+  const [local, rawDomain] = clean.split('@');
+  let domain = rawDomain;
+  if (!local || !domain) return '';
+  const labels = domain.split('.');
+  const last = labels[labels.length - 1] || '';
+  const commonTlds = ['co.th', 'co.uk', 'com', 'net', 'org', 'biz', 'info', 'th', 'co', 'ac', 'go', 'or', 'in'];
+  const trimmedTld = commonTlds.includes(last) ? null : commonTlds.find(tld => last.startsWith(tld) && last.length > tld.length);
+  if (trimmedTld) {
+    labels[labels.length - 1] = trimmedTld;
+    domain = labels.join('.');
+  }
+  return `${local}@${domain.replace(/^www\./, '')}`;
+}
+
+function collectEmailsFromText(text) {
+  const emails = new Set();
+  if (!text) return [];
+  text = decodeBasicHtmlEntities(text);
+  let match;
+  EMAIL_REGEX.lastIndex = 0;
+  while ((match = EMAIL_REGEX.exec(text)) !== null) {
+    const email = normalizeEmail(match[1] || match[0]);
+    if (email) emails.add(email);
+  }
+  return [...emails];
+}
+
+function decodeCloudflareEmail(hex) {
+  if (!hex || hex.length < 4) return '';
+  try {
+    const key = parseInt(hex.slice(0, 2), 16);
+    let decoded = '';
+    for (let i = 2; i < hex.length; i += 2) {
+      decoded += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    }
+    return normalizeEmail(decoded);
+  } catch {
+    return '';
+  }
+}
+
+function hostMatches(host, domains) {
+  return domains.some(d => host === d || host.endsWith('.' + d));
+}
+
+function getHost(url) {
+  try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); }
+  catch { return ''; }
+}
+
+function classifyResultHost(url) {
+  const host = getHost(url);
+  if (!host) return 'invalid';
+  if (hostMatches(host, NEWS_DOMAINS)) return 'news';
+  if (hostMatches(host, JOB_BOARD_DOMAINS)) return 'job';
+  if (hostMatches(host, DIRECTORY_DOMAINS)) return 'directory';
+  if (hostMatches(host, SOCIAL_DOMAINS)) return 'social';
+  if (hostMatches(host, SEARCH_RESULT_NOISE_DOMAINS)) return 'noise';
+  return 'candidate';
+}
+
+function scoreResultUrl(url, companyName, index = 0) {
+  const host = getHost(url);
+  if (!host) return -999;
+  let score = 100 - Math.min(index, 20);
+  const type = classifyResultHost(url);
+  const lowerUrl = String(url || '').toLowerCase();
+
+  if (ALLOWED_TLDS.some(tld => host.endsWith(tld))) score += 60;
+  if (EXTENDED_TLDS.some(tld => host.endsWith(tld))) score += 20;
+  if (isDomainRelatedToCompany(host, companyName)) score += 80;
+  if (/\/(contact|contact-us|contactus|about|about-us|company|profile|ติดต่อ)/i.test(lowerUrl)) score += 35;
+  if (/\.(pdf|csv|xls|xlsx|doc|docx)(?:$|[?#])/i.test(lowerUrl)) score -= 60;
+
+  if (type === 'news') score -= 120;
+  else if (type === 'job') score -= 95;
+  else if (type === 'directory') score -= 55;
+  else if (type === 'social') score -= 35;
+  else if (type === 'noise') score -= 75;
+
+  return score;
+}
+
+function rankSearchResults(results, companyName) {
+  return (results || [])
+    .filter(r => r && r.url)
+    .map((r, index) => ({
+      ...r,
+      _sourceType: classifyResultHost(r.url),
+      _rankScore: scoreResultUrl(r.url, companyName, index),
+    }))
+    .sort((a, b) => b._rankScore - a._rankScore);
+}
+
+function extractEmailCandidates(results, companyName) {
+  const candidates = [];
+  const seen = new Set();
+  const ranked = rankSearchResults(results, companyName);
+
+  for (const r of ranked) {
+    const text = [r.title, r.content, r.url].filter(Boolean).join(' ');
+    for (const email of collectEmailsFromText(text)) {
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({
+        email,
+        sourceUrl: r.url || '',
+        sourceType: r._sourceType || classifyResultHost(r.url),
+        rankScore: r._rankScore || 0,
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => b.rankScore - a.rankScore);
+}
 
 function extractEmails(results) {
   const emails = new Set();
   for (const r of (results || [])) {
     const text = [r.title, r.content, r.url].filter(Boolean).join(' ');
-    const found = text.match(EMAIL_REGEX) || [];
-    found.forEach(e => emails.add(e.toLowerCase()));
+    const found = collectEmailsFromText(text);
+    found.forEach(e => emails.add(e));
   }
   return [...emails];
 }
@@ -40,29 +172,37 @@ function extractEmails(results) {
 function extractEmailsFromHtml(html) {
   if (!html) return [];
   const allFound = new Set();
+  const decodedHtml = decodeBasicHtmlEntities(html);
 
   // 1. Standard regex
-  const found = html.match(EMAIL_REGEX) || [];
-  found.forEach(e => allFound.add(e.toLowerCase()));
+  collectEmailsFromText(decodedHtml).forEach(e => allFound.add(e));
 
   // 2. mailto: links — มักมี email ที่ regex พลาด
   const mailtoRegex = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
   let match;
   while ((match = mailtoRegex.exec(html)) !== null) {
-    allFound.add(match[1].toLowerCase());
+    const email = normalizeEmail(match[1]);
+    if (email) allFound.add(email);
   }
 
   // 3. Obfuscated emails: [at] (at) {at} แทน @
   const obfuscatedRegex = /([a-zA-Z0-9._%+-]+)\s*[\[\(\{]\s*(?:at|AT)\s*[\]\)\}]\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g;
   while ((match = obfuscatedRegex.exec(html)) !== null) {
-    allFound.add(`${match[1]}@${match[2]}`.toLowerCase());
+    const email = normalizeEmail(`${match[1]}@${match[2]}`);
+    if (email) allFound.add(email);
   }
 
-  // 4. HTML entity obfuscation: &#64; = @
-  const decodedHtml = html.replace(/&#64;/g, '@').replace(/&#x40;/g, '@');
-  if (decodedHtml !== html) {
-    const decoded = decodedHtml.match(EMAIL_REGEX) || [];
-    decoded.forEach(e => allFound.add(e.toLowerCase()));
+  // 4. Text obfuscation: name at domain dot com
+  const normalizedObfuscation = decodedHtml
+    .replace(/\s+(?:at|\[at\]|\(at\))\s+/gi, '@')
+    .replace(/\s+(?:dot|\[dot\]|\(dot\))\s+/gi, '.');
+  collectEmailsFromText(normalizedObfuscation).forEach(e => allFound.add(e));
+
+  // 5. Cloudflare email protection
+  const cfRegex = /data-cfemail=["']([a-f0-9]+)["']/gi;
+  while ((match = cfRegex.exec(decodedHtml)) !== null) {
+    const email = decodeCloudflareEmail(match[1]);
+    if (email) allFound.add(email);
   }
 
   // Filter junk
@@ -77,6 +217,35 @@ function extractEmailsFromHtml(html) {
     if (junkExts.some(ext => e.endsWith(ext))) return false;
     return true;
   });
+}
+
+function extractContactLinks(html, baseUrl) {
+  if (!html || !baseUrl) return [];
+  const links = [];
+  const seen = new Set();
+  const linkRegex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const contactWords = /(contact|contact-us|contactus|ติดต่อ|ติดต่อเรา|about|about-us|company|enquiry|inquiry|support|location|branches)/i;
+  let match;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    const href = decodeBasicHtmlEntities(match[1] || '').trim();
+    const label = (match[2] || '').replace(/<[^>]+>/g, ' ');
+    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
+    if (!contactWords.test(href) && !contactWords.test(label)) continue;
+
+    try {
+      const url = new URL(href, baseUrl);
+      const base = new URL(baseUrl);
+      if (url.hostname !== base.hostname) continue;
+      const finalUrl = url.href.split('#')[0];
+      if (!seen.has(finalUrl)) {
+        seen.add(finalUrl);
+        links.push(finalUrl);
+      }
+    } catch { /* skip */ }
+  }
+
+  return links.slice(0, 8);
 }
 
 // ─── Page Fetcher ────────────────────────────────────────────
@@ -139,8 +308,11 @@ function fetchPage(pageUrl, timeoutMs = 10000, redirectCount = 0) {
 
 async function crawlForEmails(searchResults, companyName, retryCount = 0) {
   const englishParts = extractEnglishParts(companyName);
+  let failureReason = 'crawl_no_candidates';
 
-  const candidateUrls = (searchResults || [])
+  const rankedResults = rankSearchResults(searchResults, companyName);
+
+  const candidateUrls = rankedResults
     .map(r => r.url)
     .filter(u => {
       if (!u || (!u.startsWith('http://') && !u.startsWith('https://'))) return false;
@@ -183,41 +355,50 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
       const initialHost = new URL(pageUrl).hostname;
       if (!canSpend(initialHost)) continue;
       const html = await fetchPage(pageUrl);
+      if (!html) failureReason = 'crawl_fetch_empty';
       const pageEmails = extractEmailsFromHtml(html);
       if (pageEmails.length > 0) {
         log(`Crawler: found ${pageEmails.length} emails from ${pageUrl}`);
         return { emails: pageEmails, source: 'website', sourceUrl: pageUrl };
       }
+      if (html) failureReason = 'crawl_no_email_on_candidate';
 
       const urlObj = new URL(pageUrl);
       const baseUrl = `${urlObj.protocol}//${urlObj.hostname}`;
       if (!triedDomains.has(urlObj.hostname)) {
         triedDomains.add(urlObj.hostname);
+        const discoveredLinks = extractContactLinks(html, baseUrl);
 
         // Step 2a: Crawl homepage — email มักอยู่ใน footer
+        let homeHtml = '';
         try {
           if (!canSpend(urlObj.hostname)) continue;
-          const homeHtml = await fetchPage(baseUrl + '/');
+          homeHtml = await fetchPage(baseUrl + '/');
           if (homeHtml.length > 1000) {
             const homeEmails = extractEmailsFromHtml(homeHtml);
             if (homeEmails.length > 0) {
               log(`Crawler: found ${homeEmails.length} emails from ${baseUrl}/ (homepage)`);
               return { emails: homeEmails, source: 'website', sourceUrl: baseUrl + '/' };
             }
+            discoveredLinks.push(...extractContactLinks(homeHtml, baseUrl));
+            failureReason = 'crawl_no_email_on_homepage';
           }
         } catch { /* skip */ }
 
-        // Step 2b: Contact pages
-        for (const contactPath of CONTACT_PATHS) {
+        // Step 2b: Contact pages and discovered contact-like links
+        const fixedContactUrls = CONTACT_PATHS.map(contactPath => baseUrl + contactPath);
+        const contactUrls = [...new Set([...discoveredLinks, ...fixedContactUrls])];
+        for (const contactUrl of contactUrls) {
           try {
             if (!canSpend(urlObj.hostname)) break;
-            const contactHtml = await fetchPage(baseUrl + contactPath);
+            const contactHtml = await fetchPage(contactUrl);
             if (contactHtml.length > 1000) {
               const contactEmails = extractEmailsFromHtml(contactHtml);
               if (contactEmails.length > 0) {
-                log(`Crawler: found ${contactEmails.length} emails from ${baseUrl + contactPath}`);
-                return { emails: contactEmails, source: 'contact-page', sourceUrl: baseUrl + contactPath };
+                log(`Crawler: found ${contactEmails.length} emails from ${contactUrl}`);
+                return { emails: contactEmails, source: 'contact-page', sourceUrl: contactUrl };
               }
+              failureReason = 'crawl_no_email_on_contact';
             }
           } catch { /* skip */ }
         }
@@ -225,7 +406,7 @@ async function crawlForEmails(searchResults, companyName, retryCount = 0) {
     } catch { /* skip */ }
   }
 
-  return { emails: [], source: 'crawl' };
+  return { emails: [], source: 'crawl', reason: failureReason };
 }
 
 // ─── Email Pattern Guessing + MX Verification ────────────────
@@ -360,9 +541,16 @@ async function guessEmailByMX(companyName) {
 
 module.exports = {
   extractEmails,
+  extractEmailCandidates,
   extractEmailsFromHtml,
   fetchPage,
   crawlForEmails,
   guessEmailByMX,
   pickUserAgent,
+  rankSearchResults,
+  classifyResultHost,
+  normalizeEmail,
+  decodeBasicHtmlEntities,
+  decodeCloudflareEmail,
+  extractContactLinks,
 };

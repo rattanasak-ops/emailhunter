@@ -13,6 +13,24 @@ generator: hermes/project-card@v1
 
 ---
 
+## DEC-004 · ปิด API_KEY auth บน VPS dashboard ของ EmailHunter (single-user mode)
+
+- วันที่: 2026-05-16
+- บริบท: user ใช้ dashboard ที่ http://103.142.150.185:8890 คนเดียว และโดน prompt ใส่ API Key ทุกครั้งเพราะ key local กับ VPS ไม่ตรงกัน · เสียเวลาในการเข้างาน
+- ทางที่เลือก: ตั้ง API_KEY= (เปล่า) ใน .env ของ VPS path /srv/projects/EmailHunter/main/.env แล้ว docker compose restart api · ใช้ backward-compat ที่ middleware (api/middleware/auth.js:14) skip auth เมื่อ key ว่าง
+- ทางที่ตัดไป: (1) แก้ middleware เปิดเฉพาะ read endpoint · ต้อง redeploy + แก้ code (2) หา API_KEY ของ VPS มาใส่ localStorage browser · แก้แค่ session เดียว · กลับมาเจอเด้งอีกถ้า cache โดนลบ
+- เหตุผล: เร็วที่สุด · 30 วินาที · ไม่ต้องแก้ code 9 ไฟล์ ไม่ต้อง redeploy · user ใช้เองคนเดียวและรับความเสี่ยง public IP เปิด dashboard แล้ว · backward-compat path มี test cover อยู่แล้ว
+- อ้างอิง: user prompt 2026-05-16 · "ผมทำใช้เอง เอาแบบนี้ไปก่อน"
+
+## DEC-003 · ถือ VPS production เป็น source of truth และใช้ public fallback ports
+
+- วันที่: 2026-05-09
+- บริบท: งานจริงของ EmailHunter รันบน VPS ไม่ใช่ localhost; port เดิม `8890/5680/8888` มี container listen แต่ external access บาง port ถูก refused จาก network policy/provider path
+- ทางที่เลือก: ตรวจ/แก้ runtime ที่ VPS `103.142.150.185` path `/srv/projects/EmailHunter/main` branch `phase-13-oss-pipeline`; เพิ่ม public fallback ports dashboard `3068`, n8n `3069`, SearXNG `3070`
+- ทางที่ตัดไป: ไม่ deploy local `main` ทับ production เพราะ production มี phase 10-13 และ local modifications ที่ใหม่กว่า GitHub main
+- เหตุผล: ลดความเสี่ยงทับ production pipeline และให้ผู้ใช้ตรวจงาน online ได้จริง
+- อ้างอิง: production verify 2026-05-09 · commits `b9f1cdc`, `ae3c64a` · dashboard `3068` 200 OK · n8n `3069` 200 OK · SearXNG `3070` reachable
+
 ## DEC-002 · ลด Disk Write จาก backup/export ตอน restart
 
 - วันที่: 2026-05-05

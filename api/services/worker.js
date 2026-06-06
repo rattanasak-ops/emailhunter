@@ -6,7 +6,7 @@ const { db, log, todayStr, nowTimeStr, nowISOStr, ensureDailyStats, getDailyStat
 const { REJECTION_REASONS } = require('../config/constants');
 const { notifyLark } = require('./notification');
 const search = require('./search');
-const { extractEmails, crawlForEmails, guessEmailByMX } = require('./crawler');
+const { extractEmailCandidates, crawlForEmails, guessEmailByMX } = require('./crawler');
 const { filterValidEmails } = require('./scorer');
 const ab = require('./antiblock');
 
@@ -28,6 +28,26 @@ const session = {
 };
 
 const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '3', 10);
+const OFFICIAL_RECOVERY_SEARCHES = Math.max(0, Math.min(3, parseInt(process.env.OFFICIAL_RECOVERY_SEARCHES || '1', 10)));
+
+function pickSearchEmails(results, companyName) {
+  const candidates = extractEmailCandidates(results || [], companyName);
+  if (candidates.length === 0) return { emails: [], sourceUrl: null, source: 'search' };
+
+  const clean = candidates.filter(c => !['news', 'job', 'noise'].includes(c.sourceType));
+  const fallback = clean.length > 0 ? clean : candidates;
+  const emails = fallback.map(c => c.email);
+  const first = fallback[0];
+  const source = first && ['news', 'job', 'directory', 'social', 'noise'].includes(first.sourceType)
+    ? 'search-noise'
+    : 'search';
+
+  return {
+    emails,
+    sourceUrl: first?.sourceUrl || null,
+    source,
+  };
+}
 
 function logSession() {
   if (session.startTime && session.processed > 0) {
@@ -59,38 +79,65 @@ async function processOneCompany() {
   try {
     session.currentCompany = { id: company.id, name: company.company_name };
     session.lastActivityAt = Date.now();
-    // Smart retry: ถ้า retry ครั้งที่ 2+ → บังคับใช้ directory/social patterns (tier 5-6)
-    const forceDirectoryTier = company.retry_count >= 1 && company.rejection_reason !== 'engine_blocked';
-    const queryInfo = forceDirectoryTier
-      ? search.buildQueryFromTier(company.company_name, [5, 6], company.last_pattern_used)
-      : search.buildQuery(company.company_name, company.last_pattern_used);
+    const queryInfo = search.buildQueryForCompany(
+      company.company_name,
+      company.retry_count,
+      company.rejection_reason,
+      company.last_pattern_used
+    );
     const engines = search.pickEnginesForQuery();
     log(`Worker: "${company.company_name}" [tier ${queryInfo.tier}] engines=${engines}`);
 
     const searchResult = await search.searchSearXNG(queryInfo.query, engines);
-    let allEmails = extractEmails(searchResult.results || []);
-    let source = 'search';
+    const searchEmails = pickSearchEmails(searchResult.results || [], company.company_name);
+    let allEmails = searchEmails.emails;
+    let source = searchEmails.source;
     let sourceResults = searchResult.results || [];
-    let foundSourceUrl = sourceResults[0]?.url || null;
+    let foundSourceUrl = searchEmails.sourceUrl || sourceResults[0]?.url || null;
+    let crawlFailureReason = null;
+
+    if ((allEmails.length === 0 || source === 'search-noise') && OFFICIAL_RECOVERY_SEARCHES > 0) {
+      const recoveryQueries = search.buildOfficialRecoveryQueries(company.company_name).slice(0, OFFICIAL_RECOVERY_SEARCHES);
+      for (const recoveryQuery of recoveryQueries) {
+        try {
+          const recoveryEngines = search.pickEnginesForQuery();
+          const recoveryResult = await search.searchSearXNG(recoveryQuery, recoveryEngines);
+          const recoveryResults = recoveryResult.results || [];
+          searchResult.results = [...(searchResult.results || []), ...recoveryResults];
+          const recoveryEmails = pickSearchEmails(recoveryResults, company.company_name);
+          if (recoveryEmails.emails.length > 0 && recoveryEmails.source !== 'search-noise') {
+            allEmails = recoveryEmails.emails;
+            source = 'official_search';
+            sourceResults = recoveryResults;
+            foundSourceUrl = recoveryEmails.sourceUrl || sourceResults[0]?.url || foundSourceUrl;
+            log(`Worker: official recovery search found candidates for ${company.company_name}`);
+            break;
+          }
+        } catch (e) {
+          log(`Worker: official recovery search error: ${e.message}`);
+        }
+      }
+    }
 
     // Fallback 1: Google CSE
-    if (allEmails.length === 0 && search.canUseGoogleCSE()) {
+    if ((allEmails.length === 0 || source === 'search-noise') && search.canUseGoogleCSE()) {
       try {
         const cseResult = await search.searchGoogleCSE(`"${company.company_name}" email ติดต่อ`);
-        const cseEmails = extractEmails(cseResult.results || []);
-        if (cseEmails.length > 0) {
-          allEmails = cseEmails;
-          source = 'google_cse';
+        const cseEmails = pickSearchEmails(cseResult.results || [], company.company_name);
+        if (cseEmails.emails.length > 0) {
+          allEmails = cseEmails.emails;
+          source = cseEmails.source === 'search-noise' ? 'google_cse_noise' : 'google_cse';
           sourceResults = cseResult.results || [];
-          foundSourceUrl = sourceResults[0]?.url || null;
+          foundSourceUrl = cseEmails.sourceUrl || sourceResults[0]?.url || null;
         }
         else searchResult.results = [...(searchResult.results || []), ...(cseResult.results || [])];
       } catch (e) { log(`Worker: CSE error: ${e.message}`); }
     }
 
     // Fallback 2: Contact Page Crawl
-    if (allEmails.length === 0 && searchResult.results?.length > 0) {
+    if ((allEmails.length === 0 || source === 'search-noise') && searchResult.results?.length > 0) {
       const crawlResult = await crawlForEmails(searchResult.results, company.company_name, company.retry_count);
+      crawlFailureReason = crawlResult.reason || null;
       if (crawlResult.emails.length > 0) {
         allEmails = crawlResult.emails;
         source = crawlResult.source;
@@ -141,7 +188,7 @@ async function processOneCompany() {
       const hadRawEmails = allEmails.length > 0;
       if (!hadResults) rejectionReason = REJECTION_REASONS.SEARCH_NO_RESULTS;
       else if (!hadRawEmails && source === 'search') rejectionReason = REJECTION_REASONS.SEARCH_NO_EMAILS;
-      else if (!hadRawEmails) rejectionReason = REJECTION_REASONS.CRAWL_NO_EMAILS;
+      else if (!hadRawEmails) rejectionReason = crawlFailureReason || REJECTION_REASONS.CRAWL_NO_EMAILS;
       else rejectionReason = REJECTION_REASONS.ALL_FILTERED;
     }
 

@@ -76,6 +76,7 @@ services:
       - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-6}
       - BACKUP_MIN_INTERVAL_MINUTES=${BACKUP_MIN_INTERVAL_MINUTES:-30}
       - CSV_EXPORT_ON_SHUTDOWN=${CSV_EXPORT_ON_SHUTDOWN:-false}
+      - DAILY_LIMIT_OVERRIDE=${DAILY_LIMIT_OVERRIDE:-0}
       - TZ=Asia/Bangkok
     volumes:
       - api-data:/data
@@ -98,11 +99,12 @@ services:
       - emailhunter-network
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:2.17.7
     container_name: emailhunter-n8n
     ports:
       - "5680:5678"
     environment:
+      - NODE_OPTIONS=--max-old-space-size=1536
       - N8N_HOST=${N8N_HOST}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - N8N_PROTOCOL=http
@@ -115,6 +117,7 @@ services:
     volumes:
       - n8n-data:/home/node/.n8n
     mem_limit: 2g
+    memswap_limit: 3g
     cpus: 1.0
     restart: unless-stopped
     healthcheck:

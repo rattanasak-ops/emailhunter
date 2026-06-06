@@ -217,9 +217,15 @@
       if (source === 'search') {
         span.className += 'badge-search';
         span.textContent = 'search';
+      } else if (source === 'official_search' || source === 'google_cse') {
+        span.className += 'badge-search';
+        span.textContent = source;
       } else if (source === 'website') {
         span.className += 'badge-website';
         span.textContent = 'website';
+      } else if (source === 'contact-page') {
+        span.className += 'badge-website';
+        span.textContent = 'contact';
       } else {
         span.className += 'badge-pending';
         span.textContent = source || '-';
@@ -392,6 +398,7 @@
       updateDailyChart(data);
       updateDonutChart(data);
       updateRejectionChart(data);
+      updatePipelineDiagnostics(data);
 
       // --- Tables ---
       window._allFound = data.all_found || [];
@@ -946,6 +953,12 @@
       'search_no_results': 'No Search Results',
       'search_no_emails': 'Results but No Emails',
       'crawl_no_emails': 'Crawl Found Nothing',
+      'crawl_no_candidates': 'No Crawl Candidates',
+      'crawl_fetch_empty': 'Crawl Fetch Empty',
+      'crawl_no_email_on_page': 'No Email on Crawled Page',
+      'crawl_no_email_on_candidate': 'No Email on Candidate',
+      'crawl_no_email_on_homepage': 'No Email on Homepage',
+      'crawl_no_email_on_contact': 'No Email on Contact',
       'all_filtered': 'All Emails Filtered',
       'engine_blocked': 'Engines Blocked',
       'timeout': 'Request Timeout',
@@ -954,6 +967,12 @@
       'search_no_results': '#6366f1',
       'search_no_emails': '#f97316',
       'crawl_no_emails': '#eab308',
+      'crawl_no_candidates': '#a16207',
+      'crawl_fetch_empty': '#ca8a04',
+      'crawl_no_email_on_page': '#d97706',
+      'crawl_no_email_on_candidate': '#d97706',
+      'crawl_no_email_on_homepage': '#eab308',
+      'crawl_no_email_on_contact': '#facc15',
       'all_filtered': '#ef4444',
       'engine_blocked': '#ec4899',
       'timeout': '#64748b',
@@ -1027,6 +1046,63 @@
           }
         });
       }
+    }
+
+    function renderDiagnosticRows(elementId, rows, labelKey) {
+      var el = document.getElementById(elementId);
+      if (!el) return;
+      el.innerHTML = '';
+      if (!rows || rows.length === 0) {
+        el.innerHTML = '<div class="text-eh-text2">No data</div>';
+        return;
+      }
+      rows.slice(0, 6).forEach(function(row) {
+        var label = row[labelKey] || row.reason || row.type || 'unknown';
+        var count = row.count || 0;
+        var div = document.createElement('div');
+        div.className = 'flex items-center justify-between gap-3 border-b border-eh-border/60 pb-1';
+        var left = document.createElement('span');
+        left.className = 'truncate text-eh-text';
+        left.textContent = label;
+        var right = document.createElement('span');
+        right.className = 'text-eh-blue font-medium';
+        right.textContent = formatNumber(count);
+        div.appendChild(left);
+        div.appendChild(right);
+        el.appendChild(div);
+      });
+    }
+
+    function updatePipelineDiagnostics(data) {
+      var diag = data.pipeline_diagnostics || {};
+      var windowEl = document.getElementById('diagnosticWindow');
+      if (windowEl) windowEl.textContent = (diag.days || window._rejectionDays || 7) + ' Days';
+
+      renderDiagnosticRows('sourceTypeList', diag.found_source_types || [], 'type');
+      renderDiagnosticRows('retryBacklogList', diag.retry_backlog || [], 'reason');
+
+      var qEl = document.getElementById('emailQualityList');
+      if (!qEl) return;
+      var flags = diag.email_anomalies || {};
+      var rows = [
+        { label: '@www domain', count: flags.www_domain || 0 },
+        { label: 'Uppercase email', count: flags.uppercase || 0 },
+        { label: 'Trailing text', count: flags.trailing_text || 0 },
+      ];
+      qEl.innerHTML = '';
+      rows.forEach(function(row) {
+        var div = document.createElement('div');
+        div.className = 'flex items-center justify-between gap-3 border-b border-eh-border/60 pb-1';
+        var left = document.createElement('span');
+        left.className = 'truncate text-eh-text';
+        left.textContent = row.label;
+        var right = document.createElement('span');
+        right.className = row.count > 0 ? 'text-eh-yellow font-medium' : 'text-eh-green font-medium';
+        right.textContent = formatNumber(row.count);
+        div.appendChild(left);
+        div.appendChild(right);
+        qEl.appendChild(div);
+      });
     }
 
     // ============================================================
@@ -1369,6 +1445,69 @@
     }
 
     // ============================================================
+    // Export Results
+    // ============================================================
+    function filenameFromDisposition(disposition, fallback) {
+      if (!disposition) return fallback;
+      var utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+      if (utf8Match) return decodeURIComponent(utf8Match[1].replace(/"/g, ''));
+      var asciiMatch = disposition.match(/filename="?([^"]+)"?/i);
+      return asciiMatch ? asciiMatch[1] : fallback;
+    }
+
+    async function downloadExport(format) {
+      var btn = document.getElementById(format === 'json' ? 'exportJsonBtn' : 'exportCsvBtn');
+      try {
+        if (btn) {
+          btn.classList.add('opacity-60', 'pointer-events-none');
+          btn.setAttribute('aria-busy', 'true');
+        }
+
+        var res = await apiFetch('/api/export?format=' + encodeURIComponent(format));
+        if (!res.ok) {
+          var errText = await res.text();
+          throw new Error(errText || ('HTTP ' + res.status));
+        }
+
+        var blob = await res.blob();
+        var fallback = 'emailhunter_export_' + new Date().toISOString().slice(0, 10) + '.' + format;
+        var filename = filenameFromDisposition(res.headers.get('Content-Disposition'), fallback);
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('Export ล้มเหลว: ' + e.message);
+      } finally {
+        if (btn) {
+          btn.classList.remove('opacity-60', 'pointer-events-none');
+          btn.removeAttribute('aria-busy');
+        }
+      }
+    }
+
+    function setupExportHandlers() {
+      var csvBtn = document.getElementById('exportCsvBtn');
+      var jsonBtn = document.getElementById('exportJsonBtn');
+      if (csvBtn) {
+        csvBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          downloadExport('csv');
+        });
+      }
+      if (jsonBtn) {
+        jsonBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          downloadExport('json');
+        });
+      }
+    }
+
+    // ============================================================
     // Reset All Data
     // ============================================================
     async function resetAllData() {
@@ -1477,6 +1616,7 @@
     // ============================================================
     // Init
     // ============================================================
+    setupExportHandlers();
     fetchStats();
     setInterval(fetchStats, 15000);
     setInterval(checkHealth, 60000);

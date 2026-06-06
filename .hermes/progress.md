@@ -1,6 +1,6 @@
 ---
 project: EmailHunter
-updated: 2026-04-24T14:42:17.815Z
+updated: 2026-05-09T23:44:20+07:00
 limit_lines: 80
 generator: hermes/project-card@v1
 ---
@@ -12,6 +12,18 @@ generator: hermes/project-card@v1
 
 ## เสร็จแล้ว (DONE)
 
+- URLs: dashboard primary `http://103.142.150.185:8890` · fallback `:3068` · n8n `:3069` · SearXNG `:3070` (จาก active)
+- 05-09 23:44 · EmailHunter success-rate recovery deployed to VPS; real queue run started
+  - Root cause work: News/Job/Directory cache trap reduced via search result source classification/ranking
+  - Added official recovery search before `not_found`: contact/official website queries with `-job -ข่าว`
+  - Crawler upgraded: stricter email normalization, Cloudflare email decode, `at/dot` obfuscation, HTML entity decode, same-host contact link discovery
+  - Worker upgraded: uses source URL that actually contained email, crawls when search email is noise, stores finer crawl rejection reasons
+  - Stats/Dashboard upgraded: `/api/stats` includes `pipeline_diagnostics`; dashboard has Pipeline Diagnostics panel
+  - Runtime override: `DAILY_LIMIT_OVERRIDE=10000` set on VPS to continue run after today already exceeded old daily limit
+  - Verification before deploy: local Jest 42/42, npm audit 0 vulnerabilities, compose config OK, local service test 11/11
+  - Verification after deploy: VPS service test 11/11; dashboard/API/n8n/SearXNG health all 200
+  - Last live run check: processed 91,665; found 11,926; pending 8,314; phase working; session 4 processed / 1 found
+  - Known non-critical issues: Lark app secret invalid; Google CSE project lacks Custom Search JSON API access; some SearXNG engines suspend temporarily
 - 05-03 18:12 · "ทำเลย" · 10 tools (Bash) (จาก active)
 - 05-03 18:08 · "มึงทำได้เลย" · 10 tools (Bash) (จาก active)
 - 05-03 17:51 · "เหมือนคุณไม่ได้เช็ค ว่า ระบบนี้ run อยู่บนไหน ip, vps อะไรใช่ไหม ได้อ่าน .env หร" · 10 tools (Bash+Read) (จาก active)

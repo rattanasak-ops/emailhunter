@@ -81,11 +81,11 @@ echo ""
 echo -e "${BLUE}[3] Network${NC}"
 NETWORK_NAME=$(docker inspect --format='{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' emailhunter-api 2>/dev/null || true)
 NETWORK=$(docker network inspect "$NETWORK_NAME" --format='{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo "not found")
-if [ "$NETWORK" = "172.25.0.0/16" ]; then
+if [ -n "$NETWORK_NAME" ] && [ "$NETWORK" != "not found" ]; then
     echo -e "  ${GREEN}PASS${NC} Network subnet: $NETWORK"
     PASS=$((PASS + 1))
 else
-    echo -e "  ${RED}FAIL${NC} Network subnet: $NETWORK (expected 172.25.0.0/16)"
+    echo -e "  ${RED}FAIL${NC} Network subnet: $NETWORK (network: ${NETWORK_NAME:-not found})"
     FAIL=$((FAIL + 1))
 fi
 

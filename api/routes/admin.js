@@ -304,10 +304,12 @@ router.get('/companies/next', (req, res) => {
 
     if (!company) return res.json({ company: null, session: { should_stop: true, reason: 'empty_queue' } });
 
-    const forceDirectoryTier = company.retry_count >= 1 && company.rejection_reason !== 'engine_blocked';
-    const queryInfo = forceDirectoryTier
-      ? search.buildQueryFromTier(company.company_name, [5, 6], company.last_pattern_used)
-      : search.buildQuery(company.company_name, company.last_pattern_used);
+    const queryInfo = search.buildQueryForCompany(
+      company.company_name,
+      company.retry_count,
+      company.rejection_reason,
+      company.last_pattern_used
+    );
     const engines = search.pickEnginesForQuery();
 
     res.json({

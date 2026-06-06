@@ -8,7 +8,75 @@ const { db, log, todayStr, ensureDailyStats, getDailyStats, formatNumber } = req
 const search = require('../services/search');
 const worker = require('../services/worker');
 const ab = require('../services/antiblock');
+const { classifyResultHost } = require('../services/crawler');
 const { abState, workCycle } = ab;
+
+function sourceTypeFromUrl(url) {
+  if (!url) return 'unknown';
+  return classifyResultHost(url);
+}
+
+function getPipelineDiagnostics(days) {
+  const sinceExpr = `date('now', '-' || ? || ' days', 'localtime')`;
+
+  const sourceRows = db.prepare(`
+    SELECT source_url FROM companies
+    WHERE status IN ('done','found') AND email IS NOT NULL AND email != ''
+      AND processed_date >= ${sinceExpr}
+  `).all(days);
+
+  const sourceCounts = {};
+  for (const row of sourceRows) {
+    const type = sourceTypeFromUrl(row.source_url);
+    sourceCounts[type] = (sourceCounts[type] || 0) + 1;
+  }
+
+  const sourceTypes = Object.entries(sourceCounts)
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const retryBacklog = db.prepare(`
+    SELECT COALESCE(rejection_reason, 'unknown') as reason, COUNT(*) as count
+    FROM companies WHERE status = 'retry'
+    GROUP BY COALESCE(rejection_reason, 'unknown')
+    ORDER BY count DESC
+  `).all();
+
+  const patternPerformance = db.prepare(`
+    SELECT last_pattern_used as pattern,
+           COUNT(*) as used,
+           SUM(CASE WHEN status IN ('found','done') AND email IS NOT NULL AND email != '' THEN 1 ELSE 0 END) as found
+    FROM companies
+    WHERE last_pattern_used IS NOT NULL AND processed_date >= ${sinceExpr}
+    GROUP BY last_pattern_used
+    HAVING used >= 10
+    ORDER BY (1.0 * found / used) DESC, used DESC
+    LIMIT 12
+  `).all(days).map(r => ({
+    pattern: r.pattern,
+    used: r.used,
+    found: r.found || 0,
+    rate: r.used > 0 ? Math.round((r.found || 0) / r.used * 1000) / 10 : 0,
+  }));
+
+  const emailAnomalies = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN lower(email) LIKE '%@www.%' THEN 1 ELSE 0 END), 0) as www_domain,
+      COALESCE(SUM(CASE WHEN email GLOB '*[A-Z]*' THEN 1 ELSE 0 END), 0) as uppercase,
+      COALESCE(SUM(CASE WHEN email LIKE '%.comAdvertising%' OR email LIKE '%.comสมัคร%' THEN 1 ELSE 0 END), 0) as trailing_text
+    FROM companies
+    WHERE status IN ('done','found') AND email IS NOT NULL AND email != ''
+      AND processed_date >= ${sinceExpr}
+  `).get(days);
+
+  return {
+    days,
+    found_source_types: sourceTypes,
+    retry_backlog: retryBacklog,
+    pattern_performance: patternPerformance,
+    email_anomalies: emailAnomalies || { www_domain: 0, uppercase: 0, trailing_text: 0 },
+  };
+}
 
 // Full stats for dashboard
 router.get('/', (req, res) => {
@@ -83,6 +151,8 @@ router.get('/', (req, res) => {
 
     const lastUpdatedTs = state.recentSpeeds.length > 0 ? new Date(state.recentSpeeds[state.recentSpeeds.length - 1]).toISOString() : null;
 
+    const rejectionDays = parseInt(req.query.rejection_days) || 7;
+
     res.json({
       total_companies: total, processed, found, not_found: notFound, errors, pending, success_rate: successRate,
       current_speed: currentSpeed, avg_speed: avgSpeed, status: systemStatus, last_updated: lastUpdatedTs,
@@ -127,13 +197,19 @@ router.get('/', (req, res) => {
       },
       rejection_reasons: (() => {
         try {
-          const days = parseInt(req.query.rejection_days) || 7;
           return db.prepare(`
             SELECT rejection_reason as reason, COUNT(*) as count FROM companies
             WHERE rejection_reason IS NOT NULL AND processed_date >= date('now', '-' || ? || ' days', 'localtime')
             GROUP BY rejection_reason ORDER BY count DESC
-          `).all(days);
+          `).all(rejectionDays);
         } catch { return []; }
+      })(),
+      pipeline_diagnostics: (() => {
+        try { return getPipelineDiagnostics(rejectionDays); }
+        catch (e) {
+          log(`stats diagnostics warning: ${e.message}`);
+          return { days: rejectionDays, found_source_types: [], retry_backlog: [], pattern_performance: [], email_anomalies: {} };
+        }
       })(),
       daily_history: dailyHistory, recent, all_found: allFound, error_log: errorLog,
       manual_mode: state.manualMode || 'auto',

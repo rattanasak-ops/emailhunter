@@ -73,6 +73,9 @@ const REJECTION_REASONS = {
   SEARCH_NO_RESULTS: 'search_no_results',
   SEARCH_NO_EMAILS: 'search_no_emails',
   CRAWL_NO_EMAILS: 'crawl_no_emails',
+  CRAWL_NO_CANDIDATES: 'crawl_no_candidates',
+  CRAWL_FETCH_EMPTY: 'crawl_fetch_empty',
+  CRAWL_NO_EMAIL_ON_PAGE: 'crawl_no_email_on_page',
   ALL_FILTERED: 'all_filtered',
   ENGINE_BLOCKED: 'engine_blocked',
   TIMEOUT: 'timeout',
@@ -105,6 +108,42 @@ const FOREIGN_TLDS = [
 const THAI_COMPANY_SUFFIXES = /บริษัท|จำกัด|มหาชน|\(ประเทศไทย\)|ห้างหุ้นส่วน|สามัญ|จำกัด\s*\(มหาชน\)/g;
 
 const EMAIL_PREFIXES = ['info', 'contact', 'sales', 'admin', 'service', 'support'];
+
+// ─── Search Result Source Classes ───────────────────────────
+// ใช้ลดผลลัพธ์ cache/news/job/directory ที่กิน top results แต่ไม่ใช่เว็บบริษัทจริง
+const NEWS_DOMAINS = [
+  'thairath.co.th', 'mgronline.com', 'dailynews.co.th', 'matichon.co.th',
+  'posttoday.com', 'prachachat.net', 'bangkokpost.com', 'nationtv.tv',
+  'pptvhd36.com', 'khaosod.co.th', 'springnews.co.th', 'sanook.com',
+  'kapook.com', 'thebangkokinsight.com', 'bangkokbiznews.com',
+];
+
+const DIRECTORY_DOMAINS = [
+  'connectbizs.com', 'longdo.com', 'yellowpages.co.th', 'trustonline.co.th',
+  'thaidbs.com', 'thaibizdir.com', 'registered.in.th', 'dataforthai.com',
+  'smeregister.com', 'infoquest.co.th', 'checkraka.com', 'creden.co',
+  'thaibizindex.com', 'sixtygram.com',
+];
+
+const JOB_BOARD_DOMAINS = [
+  'jobthai.com', 'jobsdb.com', 'jobbkk.com', 'indeed.com', 'linkedin.com',
+  'jobth.com', 'trustmail.jobthai', 'getlinks.com',
+];
+
+const SOCIAL_DOMAINS = [
+  'facebook.com', 'line.me', 'youtube.com', 'twitter.com', 'instagram.com',
+  'tiktok.com', 'linkedin.com',
+];
+
+const SEARCH_RESULT_NOISE_DOMAINS = [
+  ...NEWS_DOMAINS,
+  ...DIRECTORY_DOMAINS,
+  ...JOB_BOARD_DOMAINS,
+  'pantip.com', 'wikipedia.org', 'google.com', 'pinterest.com',
+  'amazon.com', 'lazada.co.th', 'shopee.co.th', 'reddit.com', 'zhihu.com',
+  'play.google.com', 'apps.apple.com', 'github.com', 'stackoverflow.com',
+  'trustpilot.com', 'glassdoor.com', 'medium.com', 'quora.com',
+];
 
 // ─── Contact Page Paths (เรียงตามความน่าจะเจอ email มากสุดก่อน) ─
 const CONTACT_PATHS = [
@@ -179,6 +218,11 @@ module.exports = {
   FOREIGN_TLDS,
   THAI_COMPANY_SUFFIXES,
   EMAIL_PREFIXES,
+  NEWS_DOMAINS,
+  DIRECTORY_DOMAINS,
+  JOB_BOARD_DOMAINS,
+  SOCIAL_DOMAINS,
+  SEARCH_RESULT_NOISE_DOMAINS,
   CONTACT_PATHS,
   CRAWL_SKIP_DOMAINS,
   ALLOWED_TLDS,

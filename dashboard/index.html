@@ -337,6 +337,27 @@
       </div>
     </div>
 
+    <div class="card p-5 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-medium text-eh-text2 uppercase tracking-wider">Pipeline Diagnostics</h3>
+        <span id="diagnosticWindow" class="text-xs text-eh-text2">7 Days</span>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-eh-text2 mb-2">Found Source Types</div>
+          <div id="sourceTypeList" class="space-y-2 text-xs text-eh-text2"></div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-eh-text2 mb-2">Retry Backlog</div>
+          <div id="retryBacklogList" class="space-y-2 text-xs text-eh-text2"></div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-eh-text2 mb-2">Email Quality Flags</div>
+          <div id="emailQualityList" class="space-y-2 text-xs text-eh-text2"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- ============================================================ -->
     <!-- 7. Recent Activity Table -->
     <!-- ============================================================ -->

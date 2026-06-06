@@ -198,6 +198,30 @@ function buildQueryFromTier(companyName, allowedTiers, excludePattern) {
   };
 }
 
+function getRetryTiers(rejectionReason) {
+  if (rejectionReason === 'all_filtered') return [2, 3, 5, 6];
+  if (rejectionReason === 'search_no_emails' || rejectionReason === 'search_no_results' ||
+      rejectionReason === 'crawl_no_emails' || String(rejectionReason || '').startsWith('crawl_')) {
+    return [2, 3, 4];
+  }
+  return [5, 6];
+}
+
+function buildQueryForCompany(companyName, retryCount = 0, rejectionReason = null, excludePattern = null) {
+  if (retryCount >= 1 && rejectionReason !== 'engine_blocked') {
+    return buildQueryFromTier(companyName, getRetryTiers(rejectionReason), excludePattern);
+  }
+  return buildQuery(companyName, excludePattern);
+}
+
+function buildOfficialRecoveryQueries(companyName) {
+  return [
+    `"${companyName}" เว็บไซต์ ติดต่อ`,
+    `"${companyName}" official website contact`,
+    `"${companyName}" contact us -job -jobs -สมัครงาน -ข่าว`,
+  ];
+}
+
 // ─── SearXNG Search ──────────────────────────────────────────
 
 function searchSearXNG(query, engines) {
@@ -345,6 +369,9 @@ module.exports = {
   // Query
   buildQuery,
   buildQueryFromTier,
+  buildQueryForCompany,
+  buildOfficialRecoveryQueries,
+  getRetryTiers,
   patternStats,
   trackPatternResult,
   // Backoff state

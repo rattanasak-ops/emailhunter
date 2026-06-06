@@ -183,6 +183,7 @@ function scoreEmail(email, companyName, source = 'search') {
 function getMinScore(source) {
   if (source === 'website' || source === 'contact-page') return 20;  // เจอบนเว็บบริษัท → เชื่อถือได้
   if (source === 'mx-guess') return 30;                               // guess → ต้องมั่นใจหน่อย
+  if (source === 'search-noise' || source === 'google_cse_noise') return 45; // news/job/directory cache → ต้องเข้มขึ้น
   return 25;                                                          // search snippet → กลาง
 }
 

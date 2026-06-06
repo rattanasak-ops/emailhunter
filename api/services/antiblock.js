@@ -11,6 +11,7 @@ const { ERROR_BUFFER_SIZE } = require('../config/constants');
 const { notifyLark } = require('./notification');
 
 const USING_PROXY = process.env.USE_PROXY === 'true';
+const DAILY_LIMIT_OVERRIDE = parseInt(process.env.DAILY_LIMIT_OVERRIDE || '0', 10);
 
 // ─── Shared State ────────────────────────────────────────────
 const abState = {
@@ -148,6 +149,11 @@ function checkErrorBackoff() {
 
 // ─── Daily Limit ─────────────────────────────────────────────
 function getDailyLimit() {
+  if (DAILY_LIMIT_OVERRIDE > 0) {
+    abState.DAILY_LIMIT = DAILY_LIMIT_OVERRIDE;
+    abState.dailyLimitTier = 'override';
+    return abState.DAILY_LIMIT;
+  }
   const today = todayStr();
   if (today !== abState.dailyLimitDate) {
     abState.DAILY_LIMIT = randomBetween(2000, 3000);
